@@ -1,0 +1,15 @@
+export type Bar = { time: number; open: number; high: number; low: number; close: number; volume: number | null; closed: boolean; end?: number; updated?: number };
+export type Market = { id: string; name: string; category: string; asset: string; quote: string; precision: number; color: string; mark: string };
+export type Quote = { price: number; change: number; high: number; low: number; volume: number };
+export type FeedState = "connecting" | "live" | "polling" | "historical" | "delayed" | "reconnecting" | "disconnected" | "closed" | "setup";
+export type Indicator = { uid: string; kind: string; length: number; multiplier: number; color: string; width: number; opacity: number; visible: boolean; frame: string };
+export type Script = { id: string; name: string; language: string; source: string; overlay: boolean; builtin?: boolean; remote?: boolean };
+export type Plot = { name: string; values: (number | null)[]; color?: string; type: "line" | "histogram"; directionColor?: boolean; offset?: number };
+export type RenderedIndicator = { config: Indicator; plots: Plot[]; bars: readonly Bar[]; overlay: boolean };
+export type Execution = { duration?: number; bytes?: number; error?: string; log?: string; timestamp?: number };
+export type DrawPoint = { time: number; price: number };
+export type Tool = "cursor" | "horizontal" | "vertical" | "trend" | "rectangle" | "fibonacci" | "measure" | "risk";
+export type Drawing = { id: string; type: Tool; points: DrawPoint[] };
+export type Alert = { id: string; symbol: string; value: number; direction: "above" | "below"; indicator?: { uid: string; plot: string; name: string; frame: string }; fired?: number };
+export type Article = { id: string; title: string; url: string; source: string; date: number; category: string };
+export type CalendarEvent = { id: string; title: string; url?: string; source: string; date: number; country: string; impact: number; previous: string | null; forecast: string | null; actual: string | null };
