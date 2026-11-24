@@ -7,7 +7,6 @@
     "dev": "next dev --webpack",
     "build": "next build --webpack",
     "start": "next start",
-    "relay": "node --env-file-if-exists=.env.local server/relay.mjs",
     "test": "node --test tests/*.test.mjs",
     "typecheck": "tsc --noEmit",
     "benchmark": "node scripts/benchmark.mjs"

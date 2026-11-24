@@ -12,7 +12,7 @@ import { useMarket, useQuotes } from "./use-market";
 import { useIndicators } from "./use-indicators";
 import { download, usePersisted, useScripts } from "./use-persisted";
 import { catalog, byIndicator, DEFAULT_INDICATORS, MAX_ACTIVE, PALETTE } from "../lib/indicators.mjs";
-import { byId, frames, markets, primaryFrames, twelveFrames, yieldFrames } from "../lib/instruments.mjs";
+import { byId, frames, markets, primaryFrames, yieldFrames } from "../lib/instruments.mjs";
 import { pnl, tradeExit } from "../lib/trading.mjs";
 import type { Alert, Bar, Drawing, FeedState, Indicator, Market, Script, Tool } from "../lib/types";
 import type { EditorLog } from "./indicator-panels";
@@ -49,7 +49,7 @@ const initial: Preferences = { symbol: "BTCUSDT", frame: "15m", theme: "dark", t
 
 function availableFrames(market: Market) {
   if (market.id === "US10Y") return Object.keys(yieldFrames);
-  if (market.category !== "Crypto") return Object.keys(twelveFrames);
+  if (market.category !== "Crypto") return ["1m", "3m", "5m", "15m", "30m", "45m", "1h", "2h", "4h", "6h", "8h", "12h", "1d", "1w", "1M"];
   return frameNames;
 }
 
@@ -85,20 +85,22 @@ export default function Terminal() {
   const modal = useRef<HTMLDivElement>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const market = byId[prefs.symbol] ?? byId.BTCUSDT;
-  const usesTwelveData = market.category !== "Crypto" && market.id !== "US10Y";
+  const usesBiquote = market.category !== "Crypto" && market.id !== "US10Y";
   const supportedFrames = availableFrames(market);
   const frame = supportedFrames.includes(prefs.frame) ? prefs.frame : supportedFrames[0];
   const indicators = savedIndicators;
   const activeCount = indicators.filter(config => config.visible).length;
   const marketState = useMarket(market, frame, prefs.provider, ready);
   const rawQuotes = useQuotes(marketIds, ready);
-  const quotes = prefs.provider === "okx" || marketState.source === "OKX Spot" ? {} : rawQuotes;
+  const quotes = prefs.provider === "okx" || marketState.source === "OKX Spot"
+    ? Object.fromEntries(Object.entries(rawQuotes).filter(([symbol]) => byId[symbol]?.category !== "Crypto"))
+    : rawQuotes;
   const indicatorState = useIndicators(indicators, scripts, marketState.bars, market, frame, marketState.source, ready && scriptsReady, runnerKey);
   const last = marketState.bars.at(-1);
   const previous = marketState.bars.at(-2);
   const observed = hover ?? last;
   const quote = quotes[market.id];
-  const marketPreset = marketState.source || (market.category === "Crypto" ? prefs.provider === "okx" ? "OKX Spot" : "Binance / OKX Spot" : market.id === "US10Y" ? "FRED" : "Twelve Data");
+  const marketPreset = marketState.source || (market.category === "Crypto" ? prefs.provider === "okx" ? "OKX Spot" : "Binance / OKX Spot" : market.id === "US10Y" ? "FRED" : "biquote MT5");
   const live = marketState.status === "live";
   const chartKey = market.id + ":" + frame + ":" + marketState.source;
   const listed = drawings[market.id] ?? noDrawings;
@@ -329,7 +331,7 @@ export default function Terminal() {
               <strong>{marketState.status === "connecting" ? "Memuat riwayat pasar" : marketState.status === "setup" ? "Penyedia data belum terhubung" : "Chart belum tersedia"}</strong>
               <p>{marketState.message || market.id + " · " + frame}</p>
               {marketState.status !== "connecting" && <div className="chart-blank-actions">
-                {usesTwelveData && <button className="accent-button" onClick={() => setDialog("data")}><Settings2 size={14}/>Konfigurasi data</button>}
+                {usesBiquote && <button className="accent-button" onClick={() => setDialog("data")}><Settings2 size={14}/>Konfigurasi data</button>}
                 <button className="subtle-button" onClick={marketState.refresh}><RotateCcw size={14}/>Coba lagi</button>
               </div>}
             </div>}
@@ -413,7 +415,7 @@ export default function Terminal() {
         {dialog === "indicators" && <><div className="modal-quick"><button className="subtle-button" onClick={() => { setDialog(null); setLower("manager"); }}><Layers3 size={15}/>Kelola indikator</button><button className="accent-button" onClick={() => { setRequested(null); setDialog(null); setLower("editor"); }}><Code2 size={15}/>Code Editor</button></div><IndicatorLibrary configs={indicators} scripts={scripts} onAdd={addIndicator} onEdit={showScript}/></>}
         {dialog === "alerts" && <AlertsPanel key={market.id + frame} alerts={alerts} market={market} timeframe={frame} plots={alertPlots} current={last?.close} timezone={prefs.tz} onAdd={item => { setAlerts(value => [...value,item]); tell("Alert " + item.symbol + " dibuat."); }} onRemove={id => setAlerts(value => value.filter(item => item.id !== id))}/>}
         {dialog === "news" && <><div className="category-filters mobile-news-tabs"><button className={mobileEditorial === "news" ? "selected" : ""} onClick={() => setMobileEditorial("news")}>Berita</button><button className={mobileEditorial === "calendar" ? "selected" : ""} onClick={() => setMobileEditorial("calendar")}>Kalender ekonomi</button></div>{mobileEditorial === "news" ? <NewsPanel timezone={prefs.tz}/> : <CalendarPanel timezone={prefs.tz}/>}</>}
-        {dialog === "data" && <MarketDataSetup market={usesTwelveData ? market : byId.XAUUSD} frame={usesTwelveData ? frame : "15m"}/>}
+        {dialog === "data" && <MarketDataSetup market={usesBiquote ? market : byId.XAUUSD} frame={usesBiquote ? frame : "15m"}/>}
         {dialog === "settings" && <div className="settings">
           <div className="settings-form">
             <label>Tema<select value={prefs.theme} onChange={event => set({ theme: event.target.value })}><option value="dark">Gelap</option><option value="light">Terang</option></select></label>

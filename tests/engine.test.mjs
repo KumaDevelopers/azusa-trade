@@ -81,3 +81,24 @@ test("fills are causal and OHLC backtest gives SL priority at ambiguous prices",
   assert.equal(tradeExit({ ...trade, liveOnly: true }, { close: 100 }), null);
   assert.ok(Math.abs(pnl(trade, 110) - 9.79) < 0.000001);
 });
+
+
+test("Pine v6 common series helpers support nested expressions, ATR and stdev", () => {
+  const bars = [bar(0, 2), bar(60, 4), bar(120, 6), bar(180, 8)];
+  const compiled = compileScript("pine", `//@version=6
+indicator("Extended", overlay=false)
+length = input.int(2, "Length")
+trend = ta.sma(hlc3, length)
+vol = ta.atr(length)
+plot(trend, title="SMA", color=color.orange)
+plot(vol, title="ATR")
+plot(ta.stdev(close, length), title="STD")
+plot(ta.change(close, 1), title="change")
+plot(ta.crossover(ta.ema(close, 2), ta.sma(close, 2)), title="cross")`);
+  const plots = runScript(compiled, bars);
+  assert.equal(plots.length, 5);
+  assert.equal(plots[0].values[0], null);
+  assert.deepEqual(plots[2].values, [null, 1, 1, 1]);
+  assert.deepEqual(plots[3].values, [null, 2, 2, 2]);
+  assert.ok(plots[1].values[1] > 0);
+});

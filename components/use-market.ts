@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { startBiquoteStream } from "../lib/biquote-stream.mjs";
 import { aggregateBars, binanceFrames, bucketTime, byId, frames, mergeBars, parseBinanceRows, validBar } from "../lib/instruments.mjs";
 import type { Bar, FeedState, Market, Quote } from "../lib/types";
 
@@ -46,7 +47,7 @@ export async function fetchHistory(market: Market, frame: string, provider = "au
   }
 }
 
-function withinTwelveSession() {
+function withinForexSession() {
   const time = new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", weekday: "short", hour: "numeric", hourCycle: "h23" }).formatToParts();
   const day = time.find(part => part.type === "weekday")?.value;
   const hour = Number(time.find(part => part.type === "hour")?.value);
@@ -70,7 +71,7 @@ export function useMarket(market: Market, frame: string, provider: string, enabl
     const native = nativeBinance[frame];
     let sourceBars: Bar[] = [];
     let socket: WebSocket | null = null;
-    let eventSource: EventSource | null = null;
+    let biquoteStream: { close(): void } | null = null;
     let watchdog: ReturnType<typeof setInterval> | undefined;
     let retry: ReturnType<typeof setTimeout> | undefined;
     let attempts = 0;
@@ -80,6 +81,13 @@ export function useMarket(market: Market, frame: string, provider: string, enabl
     let connectedAt = 0;
     let lastPriceTime = 0;
     let latestFxBar: Bar | undefined;
+    let forexPoll: ReturnType<typeof setTimeout> | undefined;
+    let forexPollRunning = false;
+    const forexPollSeconds = 15;
+    let forexStreamHealthy = false;
+    let forexFailures = 0;
+    let lastStreamEvent = 0;
+    let lastForexReload = 0;
     let lastFrameBar: Bar | undefined;
     let priming: Promise<void> | null = null;
     let latestAggregateEvent = 0;
@@ -116,7 +124,7 @@ export function useMarket(market: Market, frame: string, provider: string, enabl
         if (!lastFrameBar || (newest?.time ?? 0) > lastFrameBar.time) lastFrameBar = newest;
         const recentCrypto = market.category === "Crypto" && !history.stale && newest && (newest.end ?? newest.time) >= Date.now() / 1000 - 30;
         const phase = history.delaySeconds ? "delayed"
-          : market.category !== "Crypto" && !history.observation && !withinTwelveSession() ? "closed"
+          : market.category !== "Crypto" && !history.observation && !withinForexSession() ? "closed"
           : recentCrypto && connectedAt ? "polling" : "historical";
         setData(previous => {
           if (previous.key !== key) return previous;
@@ -131,8 +139,7 @@ export function useMarket(market: Market, frame: string, provider: string, enabl
         });
       }).catch(error => {
         if (signal.aborted) return;
-        if (["TWELVE_DATA_KEY_REQUIRED", "TWELVE_DATA_INVALID_KEY", "TWELVE_DATA_ACCESS_DENIED"].includes(error.code)) status("setup", error.message);
-        else if (!(lastEvent && Date.now() - lastEvent < 25000)) status("disconnected", error.message);
+        if (!(lastEvent && Date.now() - lastEvent < 25000)) status("disconnected", error.message);
       }).finally(() => { requested = null; });
       return requested;
     }
@@ -227,33 +234,97 @@ export function useMarket(market: Market, frame: string, provider: string, enabl
       } catch { status("disconnected", "WebSocket tidak tersedia di jaringan ini."); }
     }
 
+    // Both SSE and REST snapshots share the same causal OHLC update path.
+    // REST snapshots are explicitly marked polling, never LIVE.
+    function applyForexPrice(price: number, time: number, realTimeTick: boolean, bid?: number, ask?: number) {
+      if (!Number.isFinite(price) || price <= 0 || !Number.isFinite(time) || time <= 0 || time < lastPriceTime) return;
+      if (!withinForexSession()) { status("closed", "Sesi Forex sedang tutup."); return; }
+      lastPriceTime = time;
+      const bucket = bucketTime(time, frame);
+      const previous = latestFxBar;
+      if (previous && bucket < previous.time) return;
+      const same = previous?.time === bucket;
+      const open = same ? previous.open : price;
+      const bar: Bar = {
+        time: bucket, open,
+        high: Math.max(same ? previous.high : price, price),
+        low: Math.min(same ? previous.low : price, price),
+        close: price, volume: null, closed: false,
+        end: frame === "1M" ? Date.UTC(new Date(bucket * 1000).getUTCFullYear(), new Date(bucket * 1000).getUTCMonth() + 1, 1) / 1000 : bucket + map[frame],
+      };
+      latestFxBar = bar;
+      // Never present REST observations as real-time ticks.
+      ingest(bar, time * 1000, { bid, ask });
+      if (!realTimeTick) status("polling", "Cadangan snapshot biquote; menunggu tick live.");
+      if (previous && previous.time !== bucket && Date.now() - lastForexReload > 45000) {
+        lastForexReload = Date.now();
+        void reload();
+      }
+    }
+
+    function scheduleForexPoll(delay: number) {
+      clearTimeout(forexPoll);
+      forexPoll = setTimeout(() => { forexPoll = undefined; void pollForex(); }, delay);
+    }
+
+    async function pollForex() {
+      if (signal.aborted || forexPollRunning || market.id === "US10Y") return;
+      if (forexStreamHealthy && Date.now() - lastStreamEvent < 45000) {
+        scheduleForexPoll(forexPollSeconds * 1000);
+        return;
+      }
+      if (!withinForexSession()) {
+        status("closed", "Sesi Forex sedang tutup.");
+        scheduleForexPoll(60000);
+        return;
+      }
+      forexPollRunning = true;
+      try {
+        const snapshot = await fetchJSON("/api/price?symbol=" + encodeURIComponent(market.id), signal);
+        if (signal.aborted) return;
+        if (!snapshot.stale && snapshot.marketState === "closed") status("closed", "Pasar tutup; menampilkan harga terakhir.");
+        else if (!snapshot.stale && !snapshot.quoteStale && Number.isFinite(snapshot.price) && Number.isFinite(snapshot.observedAt)) {
+          applyForexPrice(snapshot.price, snapshot.observedAt, false, snapshot.bid, snapshot.ask);
+        } else status("historical", "Snapshot biquote belum diperbarui.");
+        forexFailures = 0;
+      } catch (error) {
+        if (signal.aborted) return;
+        forexFailures++;
+        const reason = error instanceof Error ? error.message : "Tidak dapat mengambil harga.";
+        status("disconnected", reason);
+      } finally {
+        forexPollRunning = false;
+        if (!signal.aborted) scheduleForexPoll(Math.max(forexPollSeconds * 1000, Math.min(120000, 10000 * 2 ** Math.min(forexFailures, 4))));
+      }
+    }
+
     function connectForex() {
-      if (signal.aborted || market.id === "DXY" || market.id === "US10Y") return;
-      fetchJSON("/api/config", signal).then(config => {
-        if (signal.aborted || !config.forexStream || !activeSource) return;
-        const streamURL = new URL(config.forexStream);
-        streamURL.searchParams.set("symbol", market.id);
-        const stream = new EventSource(streamURL);
-        eventSource = stream;
-        stream.onerror = () => status(withinTwelveSession() ? "reconnecting" : "closed");
-        stream.onmessage = ({ data: raw }) => {
-          try {
-            const tick = JSON.parse(raw);
-            if (tick.state) { status(tick.state, tick.error); return; }
-            if (!Number.isFinite(tick.price) || tick.time < lastPriceTime) return;
-            lastPriceTime = tick.time;
-            const time = bucketTime(tick.time, frame);
-            const previous = latestFxBar;
-            if (previous && time < previous.time) return;
-            const open = previous?.time === time ? previous.open : tick.price;
-            const bar = { time, open, high: Math.max(previous?.time === time ? previous.high : open, tick.price),
-              low: Math.min(previous?.time === time ? previous.low : open, tick.price), close: tick.price, volume: null, closed: false, end: frame === "1M" ? Date.UTC(new Date(time * 1000).getUTCFullYear(), new Date(time * 1000).getUTCMonth() + 1) / 1000 : time + map[frame] };
-            if (previous && previous.time !== time) void reload();
-            latestFxBar = bar;
-            ingest(bar, tick.time * 1000, { bid: tick.bid, ask: tick.ask });
-          } catch { /* Ignore malformed relay messages. */ }
-        };
-      }).catch(() => {});
+      if (signal.aborted || market.id === "US10Y") return;
+      // SignalR tick streaming uses biquote directly from the browser, not a Vercel serverless relay.
+      scheduleForexPoll(1500);
+      biquoteStream = startBiquoteStream({
+        symbols: [market.id], signal,
+        onState: (phase: string, message?: string) => {
+          if (signal.aborted) return;
+          if (phase === "connected") { forexStreamHealthy = true; return; }
+          if (phase === "reconnecting" || phase === "unavailable") {
+            forexStreamHealthy = false;
+            if (phase === "unavailable") status("disconnected", message || "Langganan simbol tidak tersedia.");
+            else status("reconnecting", message || "Mencoba tersambung ke biquote.");
+            scheduleForexPoll(0);
+          }
+        },
+        onTick: (tick: { symbol: string; mid?: number; bid?: number; ask?: number; timestamp?: string; marketState?: string; stale?: boolean }) => {
+          if (signal.aborted || tick.stale || tick.marketState === "closed") return;
+          const price = Number(tick.mid);
+          const time = Date.parse(tick.timestamp ?? "") / 1000;
+          if (!Number.isFinite(time) || !Number.isFinite(price) || price <= 0) return;
+          if (Date.now() / 1000 - time > 120 || time > Date.now()/1000 + 10) return;
+          forexStreamHealthy = true;
+          lastStreamEvent = Date.now();
+          applyForexPrice(price, time, true, tick.bid, tick.ask);
+        },
+      });
     }
 
     void reload().then(() => {
@@ -269,19 +340,22 @@ export function useMarket(market: Market, frame: string, provider: string, enabl
       } else {
         connectForex();
         watchdog = setInterval(() => {
-          if (eventSource && Date.now() - lastEvent > 65000) {
-            status(withinTwelveSession() ? "reconnecting" : "closed");
+          // Quiet markets are not necessarily disconnected; check snapshot freshness instead.
+          if ((!forexStreamHealthy || Date.now() - lastStreamEvent > 60000) && !forexPoll && !forexPollRunning) scheduleForexPoll(0);
+          if (Date.now() - lastForexReload > 180000) {
+            lastForexReload = Date.now();
+            void reload();
           }
-          void reload();
-        }, 60000);
+        }, 20000);
       }
     });
     return () => {
       controller.abort();
       socket?.close();
-      eventSource?.close();
+      biquoteStream?.close();
       clearInterval(watchdog);
       clearTimeout(retry);
+      clearTimeout(forexPoll);
       pagination.current?.abort();
     };
     // key contains all market, timeframe, and provider inputs.
@@ -316,14 +390,14 @@ export function useMarket(market: Market, frame: string, provider: string, enabl
 
 export function useQuotes(ids: string[], enabled: boolean) {
   const [quotes, setQuotes] = useState<Record<string, Quote>>({});
-  const key = ids.filter(id => byId[id]?.category === "Crypto").sort().join(",");
+  const key = ids.filter(id => byId[id] && byId[id].category !== "Bonds").sort().join(",");
   useEffect(() => {
     if (!enabled || !key) return;
     const controller = new AbortController();
     async function update() {
       try {
         const data = await fetchJSON("/api/quotes?symbols=" + encodeURIComponent(key), controller.signal);
-        if (!controller.signal.aborted && !data.stale) setQuotes(data.quotes);
+        if (!controller.signal.aborted && data.quotes) setQuotes(previous => ({ ...previous, ...data.quotes }));
       } catch { if (!controller.signal.aborted) setQuotes({}); }
     }
     void update();

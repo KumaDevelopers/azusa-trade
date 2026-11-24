@@ -1,9 +1,9 @@
-import { aggregateBars, binanceFrames, bucketTime, byId, frames, parseBinanceRows, twelveFrames, validBar, yieldFrames } from "../lib/instruments.mjs";
+import { aggregateBars, binanceFrames, bucketTime, byId, frames, parseBinanceRows, validBar, yieldFrames } from "../lib/instruments.mjs";
 
 const mem = new Map();
 const inFlight = new Map();
 const BINANCE = "https://data-api.binance.vision";
-const TD = "https://api.twelvedata.com";
+const BIQUOTE = "https://biquote.io";
 const BLS = "https://www.bls.gov/schedule/news_release/bls.ics";
 const rss = {
   "Federal Reserve": "https://www.federalreserve.gov/feeds/press_all.xml",
@@ -31,10 +31,10 @@ export async function cached(key, ttl, get) {
   return inFlight.get(key);
 }
 
-async function upstream(url, parse = "json", providerError) {
+async function upstream(url, parse = "json", providerError, additionalHeaders = {}) {
   let response;
   try {
-    response = await fetch(url, { headers: { "user-agent": userAgent }, signal: AbortSignal.timeout(7000) });
+    response = await fetch(url, { headers: { "user-agent": userAgent, ...additionalHeaders }, signal: AbortSignal.timeout(7000) });
   } catch {
     throw new Error("Sumber data tidak dapat dihubungi.");
   }
@@ -42,7 +42,6 @@ async function upstream(url, parse = "json", providerError) {
   return response[parse]();
 }
 
-const feedSymbol = market => market.quote ? market.asset + "/" + market.quote : market.asset;
 
 async function binanceHistory(market, frame, limit, before) {
   const span = frames[frame] / (frames[binanceFrames[frame]] || frames[frame]);
@@ -74,39 +73,72 @@ async function okxHistory(market, frame, limit, before) {
 
 const providerIssue = (code, status, message) => Object.assign(new Error(message), { providerCode: code, status });
 
-function twelveDataError(status) {
-  switch (Number(status)) {
-    case 401: return providerIssue("TWELVE_DATA_INVALID_KEY", 424, "API key Twelve Data ditolak. Periksa key di Vercel, lalu redeploy.");
-    case 403: return providerIssue("TWELVE_DATA_ACCESS_DENIED", 424, "Paket Twelve Data tidak memberi akses ke simbol atau interval ini.");
-    case 429: return providerIssue("TWELVE_DATA_RATE_LIMIT", 429, "Kuota Twelve Data tercapai. Coba lagi setelah kuota tersedia.");
-    default: return providerIssue("TWELVE_DATA_UNAVAILABLE", 502, "Data Twelve Data belum tersedia untuk simbol dan interval ini.");
-  }
+// biquote OHLC is broker mid-price, not a universal exchange price. The upstream
+// stores a finite rolling window, so unavailable history must not be fabricated.
+const biquoteFrames = {
+  "1m": "1m", "3m": "1m", "5m": "5m", "15m": "15m", "30m": "30m", "45m": "15m",
+  "1h": "1h", "2h": "1h", "4h": "4h", "6h": "1h", "8h": "4h", "12h": "4h",
+  "1d": "1d", "1w": "1d", "1M": "1d",
+};
+
+function biquoteError(status) {
+  if (status === 429) return providerIssue("BIQUOTE_RATE_LIMIT", 429, "Batas permintaan biquote tercapai. Coba lagi nanti.");
+  if (status === 404) return providerIssue("BIQUOTE_SYMBOL_UNAVAILABLE", 424, "Simbol tidak tersedia di feed biquote saat ini.");
+  return providerIssue("BIQUOTE_UNAVAILABLE", 502, "Feed biquote belum dapat dihubungi.");
 }
 
-async function twelveHistory(market, frame, limit, before, env) {
-  const apiKey = env.TWELVE_DATA_API_KEY?.trim();
-  if (!apiKey) {
-    throw providerIssue("TWELVE_DATA_KEY_REQUIRED", 424, "Tambahkan TWELVE_DATA_API_KEY di Vercel, lalu redeploy.");
-  }
-  const native = twelveFrames[frame];
-  const nativeSeconds = { "1min": 60, "5min": 300, "15min": 900, "30min": 1800, "1h": 3600, "2h": 7200, "4h": 14400, "8h": 28800, "1day": 86400, "1week": 604800, "1month": 2592000 }[native];
-  if (!nativeSeconds) throw Object.assign(new Error("Timeframe ini tidak tersedia dari penyedia."), { status: 400 });
-  const span = frames[frame] / nativeSeconds;
-  const symbol = market.id === "DXY" ? (env.TWELVE_DATA_DXY_SYMBOL || "DXY") : feedSymbol(market);
-  const query = new URLSearchParams({
-    symbol, interval: native, apikey: apiKey,
-    outputsize: String(Math.min(5000, Math.ceil(limit * span))), timezone: "UTC", order: "ASC",
-    ...(before ? { end_date: new Date((before - 1) * 1000).toISOString().slice(0, 19).replace("T", " ") } : {}),
-  });
-  const data = await upstream(TD + "/time_series?" + query, "json", twelveDataError);
-  if (data?.status === "error" || !Array.isArray(data?.values)) throw twelveDataError(data?.code);
-  const bars = data.values.map(row => {
-    const time = Date.parse(row.datetime.replace(" ", "T") + (row.datetime.includes(":") ? "Z" : "T00:00:00Z")) / 1000;
-    const end = frame === "1M" ? Date.UTC(new Date(time * 1000).getUTCFullYear(), new Date(time * 1000).getUTCMonth() + 1, 1) / 1000 : time + nativeSeconds;
-    return { time, open: +row.open, high: +row.high, low: +row.low, close: +row.close, volume: row.volume == null ? null : Number(row.volume), end, closed: end * 1000 <= Date.now() };
-  }).filter(validBar).sort((a,b) => a.time - b.time);
-  if (!bars.length) throw new Error("Twelve Data tidak mengembalikan candle.");
-  return { source: "Twelve Data", delaySeconds: Number(env.TWELVE_DATA_DELAY_SECONDS || 0), bars: span === 1 ? bars : aggregateBars(bars, frame) };
+export function biquoteBars(payload, native, frame, limit, before = null) {
+  if (!Array.isArray(payload?.bars)) throw providerIssue("BIQUOTE_INVALID_OHLC", 502, "Format candle biquote tidak dikenali.");
+  const seconds = frames[native];
+  const bars = payload.bars.map(row => {
+    const time = Date.parse(row.openTime) / 1000;
+    return {
+      time, open: +row.open, high: +row.high, low: +row.low, close: +row.close,
+      volume: Number.isFinite(Number(row.tickVolume)) ? Number(row.tickVolume) : null,
+      end: time + seconds, closed: !row.isOpen,
+    };
+  }).filter(validBar).filter(bar => !before || bar.time < before).sort((a,b) => a.time - b.time);
+  const result = native === frame ? bars : aggregateBars(bars, frame);
+  return result.slice(-limit);
+}
+
+async function biquoteHistory(market, frame, limit, before) {
+  const native = biquoteFrames[frame];
+  if (!native) throw providerIssue("BIQUOTE_FRAME_UNAVAILABLE", 422, "Histori Forex biquote tersedia mulai timeframe 1 menit.");
+  const span = Math.ceil(frames[frame] / frames[native]);
+  const url = new URL("/api/" + market.id + "/ohlc", BIQUOTE);
+  url.searchParams.set("interval", native);
+  url.searchParams.set("limit", String(Math.min(1000, Math.ceil(limit * span) + 4)));
+  if (before) url.searchParams.set("to", new Date((before - 1) * 1000).toISOString());
+  const result = biquoteBars(await upstream(url, "json", biquoteError), native, frame, limit, before);
+  if (!result.length) throw providerIssue("BIQUOTE_NO_CANDLES", 424, "Belum ada candle biquote pada timeframe atau rentang ini.");
+  return { source: "biquote MT5", bars: result };
+}
+
+async function biquotePrice(market) {
+  const tick = await upstream(BIQUOTE + "/api/" + market.id, "json", biquoteError);
+  const price = Number(tick?.mid);
+  const observedAt = Date.parse(tick?.timestamp) / 1000;
+  if (!Number.isFinite(price) || price <= 0 || !Number.isFinite(observedAt))
+    throw providerIssue("BIQUOTE_EMPTY_PRICE", 502, "Harga atau timestamp biquote tidak valid.");
+  const bid = Number(tick.bid), ask = Number(tick.ask);
+  return {
+    source: "biquote MT5", price, observedAt, realTimeTick: false,
+    marketState: tick.marketState || "unknown", quoteStale: tick.stale === true || tick.marketState === "closed" || Date.now()/1000-observedAt>300,
+    ...(Number.isFinite(bid) && bid > 0 ? { bid } : {}),
+    ...(Number.isFinite(ask) && ask > 0 ? { ask } : {}),
+  };
+}
+
+function biquoteQuote(tick) {
+  const price = Number(tick?.mid);
+  if (!Number.isFinite(price) || price <= 0) return null;
+  const high = Number(tick.high), low = Number(tick.low), age = Date.parse(tick.timestamp);
+  const stale = tick.stale === true || tick.marketState === "closed" || !Number.isFinite(age) || Date.now() - age > 300000;
+  return {
+    price, change: stale ? null : Number.isFinite(Number(tick.dayDiffPercent)) ? Number(tick.dayDiffPercent) : null,
+    high: Number.isFinite(high) ? high : price, low: Number.isFinite(low) ? low : price, volume: 0,
+  };
 }
 
 async function yieldHistory(frame, limit, before, env) {
@@ -209,17 +241,6 @@ async function calendar(env) {
   return data.filter(row => row.date >= Date.now() - 7 * 86400000).sort((a,b) => a.date - b.date).slice(0, 60);
 }
 
-function streamUrl(env) {
-  if (!env.TWELVE_DATA_API_KEY?.trim() || Number(env.TWELVE_DATA_DELAY_SECONDS || 0)) return null;
-  try {
-    const url = new URL(env.TWELVE_STREAM_URL);
-    if (url.protocol === "https:" || (!env.VERCEL && url.protocol === "http:" && url.hostname === "localhost")) {
-      if (!url.username && !url.password && !url.search && !url.hash) return url.href;
-    }
-  } catch { /* Streaming is optional until a relay is connected. */ }
-  return null;
-}
-
 async function tradingEconomicsNews(key) {
   const url = new URL("https://api.tradingeconomics.com/news");
   url.searchParams.set("c", key);
@@ -240,7 +261,7 @@ export async function apiFetch(request, env = {}) {
   if (request.method !== "GET") return json({ error: "Metode tidak didukung." }, 405);
   try {
     if (url.pathname === "/api/config") return json({
-      forex: Boolean(env.TWELVE_DATA_API_KEY?.trim()), forexStream: streamUrl(env),
+      forex: true, forexStream: "https://biquote.io/hubs/tick", forexProvider: "biquote",
       economicCalendar: env.TRADING_ECONOMICS_API_KEY ? "Trading Economics" : "BLS / Federal Reserve",
     });
     if (url.pathname === "/api/history") {
@@ -255,7 +276,7 @@ export async function apiFetch(request, env = {}) {
       if (symbol === "US10Y" && !Object.hasOwn(yieldFrames, frame)) return json({ error: "Yield tersedia pada timeframe harian atau lebih tinggi." }, 400);
       const result = await cached("history:" + [symbol, frame, provider, before, limit].join(":"), before ? 300000 : 10000, async () => {
         if (symbol === "US10Y") return yieldHistory(frame, limit, before, env);
-        if (market.category !== "Crypto") return twelveHistory(market, frame, limit, before, env);
+        if (market.category !== "Crypto") return biquoteHistory(market, frame, limit, before);
         if (provider === "okx") return okxHistory(market, frame, limit, before);
         if (provider === "binance") return binanceHistory(market, frame, limit, before);
         try { return await binanceHistory(market, frame, limit, before); }
@@ -263,12 +284,42 @@ export async function apiFetch(request, env = {}) {
       });
       return json({ ...result.data, updated: result.updated, stale: result.stale });
     }
+    if (url.pathname === "/api/price") {
+      const symbol = url.searchParams.get("symbol");
+      if (!Object.hasOwn(byId, symbol) || byId[symbol].category === "Crypto" || symbol === "US10Y")
+        return json({ error: "Simbol tidak mendukung snapshot harga ini." }, 400);
+      const result = await cached("biquote:price:" + symbol, 8000, () => biquotePrice(byId[symbol]));
+      return json({ ...result.data, updated: result.updated, stale: result.stale });
+    }
     if (url.pathname === "/api/quotes") {
-      const symbols = [...new Set((url.searchParams.get("symbols") ?? "").split(","))].filter(symbol => Object.hasOwn(byId, symbol) && byId[symbol].category === "Crypto").slice(0,14);
+      const symbols = [...new Set((url.searchParams.get("symbols") ?? "").split(","))].filter(symbol => Object.hasOwn(byId, symbol)).slice(0, 30);
       if (!symbols.length) return json({ quotes: {} });
-      const query = new URLSearchParams({ symbols: JSON.stringify(symbols) });
-      const result = await cached("quotes:" + symbols.join(","), 12000, () => upstream(BINANCE + "/api/v3/ticker/24hr?" + query));
-      return json({ quotes: Object.fromEntries(result.data.map(row => [row.symbol, { price: +row.lastPrice, change: +row.priceChangePercent, high: +row.highPrice, low: +row.lowPrice, volume: +row.quoteVolume }])), updated: result.updated, stale: result.stale });
+      const crypto = symbols.filter(symbol => byId[symbol].category === "Crypto");
+      const forex = symbols.filter(symbol => !["Crypto", "Bonds"].includes(byId[symbol].category) && symbol !== "DXY");
+      const tasks = [];
+      if (crypto.length) tasks.push(cached("quotes:crypto:" + crypto.join(","), 12000, async () => {
+        const query = new URLSearchParams({ symbols: JSON.stringify(crypto) });
+        const data = await upstream(BINANCE + "/api/v3/ticker/24hr?" + query);
+        return Object.fromEntries(data.map(row => [row.symbol, { price: +row.lastPrice, change: +row.priceChangePercent, high: +row.highPrice, low: +row.lowPrice, volume: +row.quoteVolume }]));
+      }));
+      if (forex.length) tasks.push(cached("quotes:biquote:" + forex.join(","), 12000, async () => {
+        const query = new URLSearchParams();
+        forex.forEach(symbol => query.append("symbols", symbol));
+        const data = await upstream(BIQUOTE + "/api/latest?" + query, "json", biquoteError);
+        const ticks = Array.isArray(data) ? data : data?.symbol ? [data] : forex.length === 1 && data?.mid !== undefined ? [{ ...data, symbol: forex[0] }] : Array.isArray(data?.quotes) ? data.quotes
+          : Array.isArray(data?.items) ? data.items : Array.isArray(data?.ticks) ? data.ticks : Array.isArray(data?.results) ? data.results : Object.entries(data || {}).map(([symbol, quote]) => ({ ...quote, symbol }));
+        return Object.fromEntries(ticks.flatMap(tick => {
+          const symbol = tick.symbol || tick.name;
+          const quote = biquoteQuote(tick);
+          return symbol && forex.includes(symbol) && quote ? [[symbol, quote]] : [];
+        }));
+      }));
+      const results = await Promise.allSettled(tasks);
+      const fulfilled = results.filter(result => result.status === "fulfilled").map(result => result.value);
+      if (!fulfilled.length) return json({ quotes: {}, partial: true, stale: true });
+      return json({ quotes: Object.assign({}, ...fulfilled.map(entry => entry.data)),
+        updated: Math.max(...fulfilled.map(entry => entry.updated)), stale: fulfilled.every(entry => entry.stale),
+        partial: fulfilled.length !== tasks.length });
     }
     if (url.pathname === "/api/news") {
       const feedsRequested = Object.entries(rss).map(async ([source, feed]) => {

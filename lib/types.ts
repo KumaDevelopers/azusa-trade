@@ -1,6 +1,6 @@
 export type Bar = { time: number; open: number; high: number; low: number; close: number; volume: number | null; closed: boolean; end?: number; updated?: number };
 export type Market = { id: string; name: string; category: string; asset: string; quote: string; precision: number; color: string; mark: string };
-export type Quote = { price: number; change: number; high: number; low: number; volume: number };
+export type Quote = { price: number; change: number | null; high: number; low: number; volume: number };
 export type FeedState = "connecting" | "live" | "polling" | "historical" | "delayed" | "reconnecting" | "disconnected" | "closed" | "setup";
 export type Indicator = { uid: string; kind: string; length: number; multiplier: number; color: string; width: number; opacity: number; visible: boolean; frame: string };
 export type Script = { id: string; name: string; language: string; source: string; overlay: boolean; builtin?: boolean; remote?: boolean };

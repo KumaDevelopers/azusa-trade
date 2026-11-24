@@ -169,7 +169,7 @@ export function MarketDataSetup({ market, frame }: { market: Market; frame: stri
         const query = new URLSearchParams({ symbol: market.id, frame, limit: "10" });
         const response = await fetch("/api/history?" + query, { cache: "no-store", signal });
         const history = await response.json();
-        if (!response.ok) throw Error(history.error || "Riwayat dari Twelve Data belum tersedia.");
+        if (!response.ok) throw Error(history.error || "Riwayat dari biquote belum tersedia.");
         if (signal.aborted) return;
         setResult(history.stale
           ? { message: "Riwayat masih dari cache. Penyedia belum memberi respons terbaru.", ok: false }
@@ -186,13 +186,13 @@ export function MarketDataSetup({ market, frame }: { market: Market; frame: stri
 
   return <div className="data-setup">
     <dl>
-      <div><dt>API key Twelve Data</dt><dd>{config ? config.forex ? "Tersimpan" : "Belum disetel" : "—"}</dd></div>
-      <div><dt>Relay tick live</dt><dd>{config ? config.forexStream ? "URL tersedia" : "Belum aktif" : "—"}</dd></div>
+      <div><dt>Penyedia Forex</dt><dd>{config ? "biquote MT5" : "—"}</dd></div>
+      <div><dt>Streaming SignalR</dt><dd>{config ? config.forexStream ? "Tersedia (uji koneksi pada chart)" : "Belum aktif" : "—"}</dd></div>
     </dl>
     <ol>
-      <li>Ambil API key dari <a href="https://twelvedata.com/account/api-keys" target="_blank" rel="noreferrer">Twelve Data</a>.</li>
-      <li>Di Vercel, buka <strong>Settings → Environment Variables</strong>. Simpan key sebagai <code>TWELVE_DATA_API_KEY</code> untuk Production, tipe Secret.</li>
-      <li>Redeploy, lalu uji riwayat {market.id}. Tick live memerlukan relay HTTPS lewat <code>TWELVE_STREAM_URL</code>.</li>
+      <li>biquote menyediakan data Forex/Metals melalui <a href="https://biquote.io/docs/" target="_blank" rel="noreferrer">REST OHLC dan WebSocket SignalR</a> tanpa API key.</li>
+      <li>Harga mengikuti sumber broker MT5 milik biquote; jangan samakan dengan harga dari broker lain.</li>
+      <li>Klik uji riwayat untuk memeriksa candle {market.id}. Status LIVE hanya muncul setelah tick asli diterima.</li>
     </ol>
     <div className="settings-actions"><button className="accent-button" type="button" disabled={checking} onClick={() => {
       setResult(undefined);
