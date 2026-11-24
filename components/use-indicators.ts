@@ -108,8 +108,9 @@ export function useIndicators(configs: Indicator[], scripts: Script[], bars: Bar
           store.delete(id);
           setStats(previous => ({ ...previous, [id]: { error } }));
         }
-        timers.set(id, setTimeout(() => fail("Indikator melampaui batas waktu eksekusi."), 2200));
-        worker.postMessage({ id, config, bars: input, target: separate ? chartBars : null, script,
+        timers.set(id, setTimeout(() => fail("Indikator melampaui batas waktu eksekusi atau data MTF belum tersedia."),
+          script?.language === "pine" && /\b(?:request\.|array\.|type\s+)/.test(script.source) ? 20_000 : 2200));
+        worker.postMessage({ id, config, market: market.id, bars: input, target: separate ? chartBars : null, script,
           reset: !prior || input[0]?.time !== prior.target?.[0]?.time || input.at(-1)?.time !== prior.target?.at(-1)?.time });
       } catch (error) {
         pending.delete(id);

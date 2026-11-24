@@ -67,7 +67,9 @@ test("script engine rejects network, code execution and unapproved Pine features
   assert.throws(() => compileScript("pine", 'indicator("mtf")\nplot(request.security(close, 2))'));
   const gold = readFileSync(new URL("../indicators/GoldGuard.pine", import.meta.url));
   assert.equal(createHash("sha256").update(gold).digest("hex"), "1a241de8c54ae2695af94c526f5af92a67dbc8f84179ca72b79e7dd4c4567e1c");
-  assert.throws(() => compileScript("pine", gold.toString()), error => error.features.some(item => item.name === "request.security_lower_tf"));
+  const candidate = compileScript("pine", gold.toString());
+  assert.equal(candidate.engine, "pinets");
+  assert.ok(candidate.features.some(item => item.name === "request.security_lower_tf"));
 });
 test("fills are causal and OHLC backtest gives SL priority at ambiguous prices", () => {
   const result = backtest(sample, { type: "ema", fast: 10, slow: 40, fee: 10, size: 1, stopPercent: 1, targetPercent: 2, start: 60, end: 41940 });
