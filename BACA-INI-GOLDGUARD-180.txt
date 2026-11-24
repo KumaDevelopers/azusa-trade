@@ -1,0 +1,34 @@
+AZUSATRADE - GOLDGUARD 180 CANDLE (24 NOVEMBER 2026)
+
+1. indicators/GoldGuard.pine = versi 180 candle.
+2. indicators/GoldGuard-Original-12000.pine = backup asli user, tidak diubah.
+3. Semua perubahan dibatasi ke 10 titik pengaturan jumlah candle:
+   - indicator calc_bars_count: 12000 -> 180
+   - nativeHistoryBars: 6000 -> 180 (fixed)
+   - 8 request.security budgets: 700/400/300 -> 180
+4. Rumus entry, exit, stop-loss, TP, break-even, trailing, metodologi reverse
+   signal, drawing dan seluruh fungsi lain TIDAK DIUBAH.
+5. Source di website tetap dilayani dari endpoint /api/goldguard.
+6. PineTS masih EKSPERIMENTAL; pembatasan 180 bukan obat otomatis untuk
+   error internal seperti reading '464'. Peta MTF M5-W1 dan DXY/US10Y
+   membutuhkan data tiap timeframe/simbol. Bila tidak ada, jangan buat
+   sinyal palsu. EMA200 menggunakan 180 candle sehingga belum terpanaskan
+   seperti seri 200+; riwayat statistik mulai dari 180 candle yang tersedia.
+   Dengan demikian HASIL tidak dapat identik dengan versi 12000 candle.
+7. Tidak perlu Dukascopy. LIVE Forex tetap memakai biquote.
+8. Jalankan `npm run check:goldguard:180`, `npm test`, `npm run typecheck`,
+   `npm run build` sebelum `UPDATE-GITHUB.cmd`.
+9. `npm run test:goldguard` yang lama membutuhkan arsip 500 candle,
+   jadi tidak relevan untuk mode 180 ini. Skrip itu ditinggalkan sebagai
+   diagnostik historis opsional, bukan prasyarat upload.
+10. Jangan menggunakan sinyal untuk trading sungguhan sebelum perbandingan
+    output PineTS terhadap TradingView pada timeframe yang sama.
+
+CARA UPLOAD:
+  Ekstrak zip, masuk folder azusatrade, jalankan UPDATE-GITHUB.cmd.
+  Script ini menguji source, test, typecheck, build, lalu menyalin ke
+  repo C:\Users\funka\Downloads\azusa-trade-github dan push GitHub.
+
+MODE SEBELUMNYA:
+  Skrip SEED-HISTORY-GOLDGUARD.cmd dan IMPORT-HISTORY-MANUAL.cmd
+  sengaja dikeluarkan dari paket. Database tidak diisi dengan candle palsu.

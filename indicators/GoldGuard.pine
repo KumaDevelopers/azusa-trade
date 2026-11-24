@@ -1,7 +1,7 @@
 //@version=6
 // GoldGuard v2.0.0 Stable Reload. Causal Intrabar/Closed-Bar Exit Sync + Regime-Segmented 3-Core Methods + Permanent Telemetry.
 // Honest OHLC/Intrabar execution model: entries & stop moves on confirmed bars; TP/SL monitored intrabar & cross-TF without future leak.
-indicator("GoldGuard v2.0.0 Stable Reload", overlay = true, max_boxes_count = 100, max_labels_count = 500, max_lines_count = 200, calc_bars_count = 12000, dynamic_requests = true)
+indicator("GoldGuard v2.0.0 Stable Reload", overlay = true, max_boxes_count = 100, max_labels_count = 500, max_lines_count = 200, calc_bars_count = 180, dynamic_requests = true)
 string G1 = "01 Sinyal"
 mode = input.string("Active", "Selektivitas", options = ["Active", "Balanced", "Strict"], group = G1)
 useReversal = input.bool(true, "Zona + BOS/CHoCH", group = G1)
@@ -147,7 +147,7 @@ perfPauseBars = input.int(4, "Jeda metode (bar)", minval = 2, maxval = 72, group
 perfProbeScore = input.int(74, "Min skor uji ulang", minval = 65, maxval = 96, group = G11)
 
 string G12 = "12 Performa"
-nativeHistoryBars = input.int(6000, "Hist native (bar/TF)", minval = 600, maxval = 12000, step = 100, group = G12)
+int nativeHistoryBars = 180 // Batas data native tetap; formula trading tidak diubah.
 
 
 string G13 = "13 Peta"
@@ -261,8 +261,8 @@ float ema50 = ta.ema(close, 50)
 float ema200 = ta.ema(close, 200)
 float rsi = ta.rsi(close, 14)
 float vwap = ta.vwap(hlc3)
-[dxy, dxyEMA, dxyTime] = request.security(dxySymbol, tf1, [close[1], ta.ema(close, 20)[1], time_close[1]], lookahead = timeframe.in_seconds(tf1) >= timeframe.in_seconds() ? barmerge.lookahead_on : barmerge.lookahead_off, ignore_invalid_symbol = true, calc_bars_count = 400)
-[bondYield, yieldEMA, yieldTime] = request.security(yieldSymbol, tf1, [close[1], ta.ema(close, 20)[1], time_close[1]], lookahead = timeframe.in_seconds(tf1) >= timeframe.in_seconds() ? barmerge.lookahead_on : barmerge.lookahead_off, ignore_invalid_symbol = true, calc_bars_count = 400)
+[dxy, dxyEMA, dxyTime] = request.security(dxySymbol, tf1, [close[1], ta.ema(close, 20)[1], time_close[1]], lookahead = timeframe.in_seconds(tf1) >= timeframe.in_seconds() ? barmerge.lookahead_on : barmerge.lookahead_off, ignore_invalid_symbol = true, calc_bars_count = 180)
+[bondYield, yieldEMA, yieldTime] = request.security(yieldSymbol, tf1, [close[1], ta.ema(close, 20)[1], time_close[1]], lookahead = timeframe.in_seconds(tf1) >= timeframe.in_seconds() ? barmerge.lookahead_on : barmerge.lookahead_off, ignore_invalid_symbol = true, calc_bars_count = 180)
 bool macroFresh = not na(dxy) and time_close - dxyTime < 72 * 3600000
 bool yieldFresh = not na(bondYield) and time_close - yieldTime < 72 * 3600000
 int usdRelation = macroRelation == "Inverse" ? -1 : macroRelation == "Direct" ? 1 : macroRelation == "Off" ? 0 : isGold or syminfo.currency == "USD" ? -1 : syminfo.basecurrency == "USD" ? 1 : 0
@@ -270,8 +270,8 @@ float macroBias = useMacro and macroFresh ? math.sign(dxy - dxyEMA) * usdRelatio
 if useMacro and isGold and yieldFresh and usdRelation != 0
     macroBias := (macroBias - math.sign(bondYield - yieldEMA)) / 2
 // v1.23.0: daily macro proxy for INTRADAY/SWING confluence (DXY and US10Y versus their own EMA20).
-[dxyD, dxyDEMA, dxyDTime] = request.security(dxySymbol, "D", [close[1], ta.ema(close, 20)[1], time_close[1]], lookahead = timeframe.in_seconds("D") >= timeframe.in_seconds() ? barmerge.lookahead_on : barmerge.lookahead_off, ignore_invalid_symbol = true, calc_bars_count = 300)
-[yieldD, yieldDEMA, yieldDTime] = request.security(yieldSymbol, "D", [close[1], ta.ema(close, 20)[1], time_close[1]], lookahead = timeframe.in_seconds("D") >= timeframe.in_seconds() ? barmerge.lookahead_on : barmerge.lookahead_off, ignore_invalid_symbol = true, calc_bars_count = 300)
+[dxyD, dxyDEMA, dxyDTime] = request.security(dxySymbol, "D", [close[1], ta.ema(close, 20)[1], time_close[1]], lookahead = timeframe.in_seconds("D") >= timeframe.in_seconds() ? barmerge.lookahead_on : barmerge.lookahead_off, ignore_invalid_symbol = true, calc_bars_count = 180)
+[yieldD, yieldDEMA, yieldDTime] = request.security(yieldSymbol, "D", [close[1], ta.ema(close, 20)[1], time_close[1]], lookahead = timeframe.in_seconds("D") >= timeframe.in_seconds() ? barmerge.lookahead_on : barmerge.lookahead_off, ignore_invalid_symbol = true, calc_bars_count = 180)
 bool macroDFresh = not na(dxyD) and time_close - dxyDTime < 100 * 3600000
 bool yieldDFresh = not na(yieldD) and time_close - yieldDTime < 100 * 3600000
 float macroBiasD = useMacro and macroDFresh ? math.sign(dxyD - dxyDEMA) * usdRelation : 0
@@ -883,14 +883,14 @@ f_native_context(int asOfX, int horizonX) =>
     float secX = timeframe.in_seconds()
     string parent1X = secX <= 300 ? "15" : secX <= 900 ? "60" : secX <= 3600 ? "240" : secX <= 14400 ? "D" : "W"
     string parent2X = secX <= 300 ? "60" : secX <= 900 ? "240" : secX <= 3600 ? "D" : "W"
-    [p1X, t1X] = request.security(syminfo.tickerid, parent1X, f_closed_context_trend(), lookahead = barmerge.lookahead_on, calc_bars_count = 700)
-    [p2X, t2X] = request.security(syminfo.tickerid, parent2X, f_closed_context_trend(), lookahead = barmerge.lookahead_on, calc_bars_count = 700)
+    [p1X, t1X] = request.security(syminfo.tickerid, parent1X, f_closed_context_trend(), lookahead = barmerge.lookahead_on, calc_bars_count = 180)
+    [p2X, t2X] = request.security(syminfo.tickerid, parent2X, f_closed_context_trend(), lookahead = barmerge.lookahead_on, calc_bars_count = 180)
     // Macro source must also be at least as high as the native timeframe.
     // Intraday/swing use daily context, or weekly on W1. No single-intrabar LTF sampling.
     bool alignedMacroX = timeframe.in_seconds(tf1) >= secX and timeframe.in_seconds(tf1) % secX == 0
     string macroTFX = horizonX == 1 ? (alignedMacroX ? tf1 : "60") : secX <= 86400 ? "D" : timeframe.period
-    [usdX, usdEMAX, usdTX] = request.security(dxySymbol, macroTFX, [close[1], ta.ema(close, 20)[1], time_close[1]], lookahead = barmerge.lookahead_on, ignore_invalid_symbol = true, calc_bars_count = 400)
-    [yieldX, yieldEMAX, yieldTX] = request.security(yieldSymbol, macroTFX, [close[1], ta.ema(close, 20)[1], time_close[1]], lookahead = barmerge.lookahead_on, ignore_invalid_symbol = true, calc_bars_count = 400)
+    [usdX, usdEMAX, usdTX] = request.security(dxySymbol, macroTFX, [close[1], ta.ema(close, 20)[1], time_close[1]], lookahead = barmerge.lookahead_on, ignore_invalid_symbol = true, calc_bars_count = 180)
+    [yieldX, yieldEMAX, yieldTX] = request.security(yieldSymbol, macroTFX, [close[1], ta.ema(close, 20)[1], time_close[1]], lookahead = barmerge.lookahead_on, ignore_invalid_symbol = true, calc_bars_count = 180)
     int r1X = not na(t1X) and t1X <= asOfX ? nz(p1X) : 0
     int r2X = not na(t2X) and t2X <= asOfX ? nz(p2X) : 0
     int maxAgeX = int(math.max(100 * 3600000.0, timeframe.in_seconds(macroTFX) * 2000.0))
@@ -2889,5 +2889,3 @@ if barstate.islast and showStatsTable
         table.cell(statsTbl, 3, rowT, nTf > 0 ? f_num(prTf) + "%" : "-", text_color = color.white, text_size = size.tiny)
         table.cell(statsTbl, 4, rowT, nTf > 0 ? "Aktif" : "-", text_color = color.gray, text_size = size.tiny)
         table.cell(statsTbl, 5, rowT, nTf > 0 ? f_signed_r(exTf) + " (Total " + f_signed_r(array.get(permTfNetR, sSlot)) + ")" : "-", text_color = exTf >= 0 ? color.lime : color.orange, text_size = size.tiny)
-
-Error runtime, padahal script ini udah bagus banget, ringankan tapi semua fungsi nya harus sama, gak boleh ada yang beda

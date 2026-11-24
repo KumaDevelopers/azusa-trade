@@ -1,3 +1,5 @@
+> Catatan 24-11-2026: dokumen ini mencatat versi sebelumnya. Pada paket **GoldGuard 180 Candle**, parameter histori telah dipendekkan; rumus metode trading dan reverse signal tetap sama. Lihat `BACA-INI-GOLDGUARD-180.txt`.
+
 # AzusaTrade — Perbaikan chart dan indikator (24 November 2026)
 
 ## Perubahan

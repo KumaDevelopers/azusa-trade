@@ -1,0 +1,25 @@
+GOLDGUARD PINE RUNTIME DIAGNOSIS (NOT A COMPATIBILITY FIX)
+
+This package intentionally does not change indicators/GoldGuard.pine or the
+trading method, reverse signal method, and live biquote quote handling.
+
+1. Extract the ZIP to a new folder.
+2. From CMD, enter its azusatrade directory.
+3. Run DIAGNOSE-GOLDGUARD.cmd
+4. Send back goldguard-diagnosis.txt from the same directory.
+
+The script obtains up to 180 real XAUUSD 4h candles from the public AzusaTrade
+/api/history API. It runs the real installed pinets runtime instead of a mock,
+records all first-party MTF API failures, and exposes underlying error.cause
+and stack traces. It does NOT add fake candles and it does NOT push to GitHub.
+
+If the deployed API is a different URL, call:
+  DIAGNOSE-GOLDGUARD.cmd https://your-azusatrade-host.example 4h
+
+The report could reveal one or multiple separate problems: unavailable MTF
+series, dynamic request/UDT support in PineTS, or insufficient history.
+180 XAUUSD 4h candles cannot warm EMA200 fully and 180 lower-timeframe
+candles do not cover all the time range of 180 higher-timeframe candles.
+
+This diagnostic does not claim GoldGuard works. The production worker will
+continue to reject PineTS failure to avoid fabricated trading signals.

@@ -1,3 +1,7 @@
+## GoldGuard long-history upgrade (24 Nov 2026)
+
+**Mode 180 candle:** Tidak perlu Dukascopy. Jalankan `npm run check:goldguard:180`, `npm test`, `npm run typecheck`, `npm run build` dan lihat `BACA-INI-GOLDGUARD-180.txt`. Hanya budget histori yang diubah; **GoldGuard tetap belum terbukti kompatibel penuh dengan PineTS dan belum dinyatakan identik hasilnya dengan TradingView.**
+
 # AzusaTrade
 
 Terminal analisis pasar dengan Next.js, TypeScript, Tailwind CSS, dan Lightweight Charts. Workspace mendukung chart utama, chart pembanding kripto, analisis lintas timeframe, indikator, gambar chart, berita, kalender, paper trading, dan backtest EMA/SMA.
@@ -56,13 +60,13 @@ Dokumentasi resmi: https://biquote.io/docs/ . Pastikan hak penggunaan/redistribu
 
 ## GoldGuard
 
-Lampiran asli tersedia di pustaka dengan nama **AzusaTrade — Advanced Indicator**. File `indicators/GoldGuard.pine` memiliki SHA-256:
+GoldGuard 180 candle tersedia sebagai **AzusaTrade — Advanced Indicator**. File `indicators/GoldGuard.pine` memiliki SHA-256:
 
 ```
-1a241de8c54ae2695af94c526f5af92a67dbc8f84179ca72b79e7dd4c4567e1c
+1573c7fc8f1ea718a9e6bff9e71dc6b1135355eafdaedba3eae0466e7b5108e8
 ```
 
-Editor dapat memuat sumber asli dan menampilkan diagnostik saat pengembangan. Pada deployment, sumber dapat diunduh dari editor jika operator mengaktifkan `GOLDGUARD_SOURCE_PUBLIC=1`. Eksekusi GoldGuard belum kompatibel dengan engine saat ini. Pengaturan API market dan visibilitas sumber tidak mengaktifkan runtime Pine. Uji PineTS 0.13.1 pada data OHLCV lokal berhasil menjalankan EMA v6, sedangkan sumber GoldGuard asli gagal dengan `Undeclared identifier "Error"` sebelum menghasilkan plot.
+Editor dapat memuat versi 180 candle dan menampilkan diagnostik saat pengembangan. Cadangan asli tersedia sebagai `indicators/GoldGuard-Original-12000.pine`. Pada deployment, sumber dapat diunduh dari editor jika operator mengaktifkan `GOLDGUARD_SOURCE_PUBLIC=1`. Eksekusi GoldGuard belum kompatibel dengan engine saat ini. Pengaturan API market dan visibilitas sumber tidak mengaktifkan runtime Pine. Uji PineTS 0.13.1 pada data OHLCV lokal berhasil menjalankan EMA v6, sedangkan belum ada bukti script GoldGuard 180 candle sepenuhnya kompatibel; error transpiler PineTS tetap mungkin terjadi.
 
 Untuk menjalankan GoldGuard dengan hasil yang bisa diverifikasi, runtime atau port harus mempertahankan state persisten, custom types, request MTF, lower-timeframe arrays, objek visual, dan perilaku intrabar. Sertakan konteks DXY dan yield yang sama saat filter makro digunakan. Pertahankan metode, reverse signal, entry, SL/TP, break-even, trailing stop, dan cut loss.
 

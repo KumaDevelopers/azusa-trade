@@ -1,0 +1,28 @@
+AzusaTrade GoldGuard PineTS diagnostic, no change to trading source.
+Date (UTC): 2026-11-24T11:31:52.860Z
+API: https://azusa-trade.vercel.app
+Chart: XAUUSD 4h
+GoldGuard SHA256: 1573c7fc8f1ea718a9e6bff9e71dc6b1135355eafdaedba3eae0466e7b5108e8
+GoldGuard calc_bars_count: 180
+Installed PineTS: 0.13.1
+Primary OHLC: 180 of 180 valid, source=biquote MT5
+Primary range: 2026-10-14T12:00:00.000Z through 2026-11-24T08:00:00.000Z
+[RUN] PineTS actual GoldGuard compile and evaluation...
+[API] HTTP 400 US10Y/1h
+[API] HTTP 502 US10Y/1d
+[API] HTTP 502 US10Y/1d
+[RUN] Complete in 26169 ms. Plots=16, warnings=3, alerts=0
+WARNING: A passing PineTS run is not proof of TradingView signal equivalence or completed GG drawings.
+[API] Total 14 calls
+[API] XAUUSD/4h: 1
+[API] DXY/1h: 1
+[API] US10Y/1h: 1
+[API] DXY/1d: 1
+[API] US10Y/1d: 2
+[API] XAUUSD/1d: 2
+[API] XAUUSD/1w: 2
+[API] XAUUSD/5m: 1
+[API] XAUUSD/15m: 1
+[API] XAUUSD/1h: 1
+[API] XAUUSD/30m: 1
+[API] Failed calls: HTTP 400 US10Y/1h | HTTP 502 US10Y/1d | HTTP 502 US10Y/1d

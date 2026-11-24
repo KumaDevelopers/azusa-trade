@@ -1,0 +1,7 @@
+Pakai CSV XAUUSD BID dari Dukascopy Historical Data Export resmi.
+Pilih instrument XAU/USD dan timeframe 4 Hours (4h), date range setidaknya beberapa bulan atau tahun, export CSV.
+Simpan sebagai XAUUSD-4h.csv di folder ini.
+Untuk timeframe lain gunakan XAUUSD-1h.csv, XAUUSD-1d.csv, XAUUSD-30m.csv, XAUUSD-15m.csv, XAUUSD-5m.csv.
+Timestamps harus UTC atau berformat ISO dengan offset jelas. Jangan gunakan waktu lokal tanpa mengubah ke UTC, atau data akan menyimpang.
+CSV columns: timestamp/Open/High/Low/Close/Volume (urutan tetap). Lihat GOLDGUARD-HISTORY-SETUP.md.
+Dilarang mengarang data atau mengasumsikan CSV broker lain identik dengan Dukascopy BID.

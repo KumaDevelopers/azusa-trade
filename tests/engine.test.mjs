@@ -66,7 +66,7 @@ test("script engine rejects network, code execution and unapproved Pine features
   ]) assert.throws(() => compileScript("javascript", code));
   assert.throws(() => compileScript("pine", 'indicator("mtf")\nplot(request.security(close, 2))'));
   const gold = readFileSync(new URL("../indicators/GoldGuard.pine", import.meta.url));
-  assert.equal(createHash("sha256").update(gold).digest("hex"), "1a241de8c54ae2695af94c526f5af92a67dbc8f84179ca72b79e7dd4c4567e1c");
+  assert.equal(createHash("sha256").update(gold).digest("hex"), "1573c7fc8f1ea718a9e6bff9e71dc6b1135355eafdaedba3eae0466e7b5108e8");
   const candidate = compileScript("pine", gold.toString());
   assert.equal(candidate.engine, "pinets");
   assert.ok(candidate.features.some(item => item.name === "request.security_lower_tf"));

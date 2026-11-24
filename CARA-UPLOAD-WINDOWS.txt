@@ -1,28 +1,14 @@
-AzusaTrade - Fix Pine Timeframe + Indicator/Drawing Controls
-============================================================
+CARA UPDATE AZUSATRADE GOLDGUARD 180 CANDLE
 
-1. Ekstrak ZIP ini ke:
-   C:\Users\funka\OneDrive - Document Office\Downloads\AzusaTrade-Pine-Chart-Controls-Fix\
-   Folder azusatrade\ harus berisi package.json, app, components, dan UPDATE-GITHUB.cmd.
+1. Ekstrak AzusaTrade-GoldGuard-180-Candle.zip ke folder baru.
+2. Masuk folder azusatrade hasil ekstrak.
+3. Jalankan UPDATE-GITHUB.cmd dari CMD.
+   Script otomatis melakukan npm install, validasi batas histori,
+   npm test, typecheck, build, lalu push ke repo GitHub lokal.
+4. Jika tes gagal, jangan push; kirim pesan error lengkap.
+5. Source asli ada di indicators/GoldGuard-Original-12000.pine.
 
-2. Cara otomatis: klik dua kali azusatrade\UPDATE-GITHUB.cmd.
-   Script menginstall dependency, menjalankan tes + typecheck + build,
-   kemudian git pull, Robocopy, commit dan push. Script akan berhenti jika tes gagal.
-
-3. Cara manual lewat CMD (jalankan SATU PER SATU, jangan lanjut jika gagal):
-
-cd /d "C:\Users\funka\Downloads\azusa-trade-github"
-git pull --rebase origin main
-robocopy "C:\Users\funka\OneDrive - Document Office\Downloads\AzusaTrade-Pine-Chart-Controls-Fix\azusatrade" "C:\Users\funka\Downloads\azusa-trade-github" /E /R:2 /W:2 /XD .git node_modules .next .vercel dist build /XF .env .env.local .env.production .env.development
-cd /d "C:\Users\funka\Downloads\azusa-trade-github"
-git add -A
-git diff --cached --stat
-git commit -m "Fix Pine timeframe and add chart controls"
-git push origin main
-
-4. Sebaiknya uji sebelum push: npm ci, npm test, npm run typecheck, npm run build.
-   Jika 'npm' tidak dikenal, jalankan dulu set "PATH=C:\Program Files\nodejs;%PATH%"
-5. Periksa Deployments pada Vercel setelah push.
-
-Tidak menggunakan Robocopy /MIR maupun git push --force.
-GoldGuard.pine tidak diubah. GoldGuard belum terbukti kompatibel penuh.
+Tidak perlu Dukascopy, SEED-HISTORY-GOLDGUARD.cmd atau file CSV.
+Batas histori menjadi 180; semua rumus metode, entry, TP, SL,
+BE, trailing, reverse signal tidak diubah. Hasil sinyal mungkin
+berbeda akibat histori yang lebih pendek, dan PineTS belum dijamin.

@@ -9,3 +9,9 @@ dist/
 .env.production
 .env.development
 .vercel
+
+# Raw Dukascopy CSV downloads (large): keep local, only public/historical/ JSON is deployed.
+download-history/
+
+# Manually exported CSV sources are local only; JSON archives go to public/historical/
+manual-history/*.csv

@@ -1,0 +1,2891 @@
+//@version=6
+// GoldGuard v2.0.0 Stable Reload. Causal Intrabar/Closed-Bar Exit Sync + Regime-Segmented 3-Core Methods + Permanent Telemetry.
+// Honest OHLC/Intrabar execution model: entries & stop moves on confirmed bars; TP/SL monitored intrabar & cross-TF without future leak.
+indicator("GoldGuard v2.0.0 Stable Reload", overlay = true, max_boxes_count = 100, max_labels_count = 500, max_lines_count = 200, calc_bars_count = 12000, dynamic_requests = true)
+string G1 = "01 Sinyal"
+mode = input.string("Active", "Selektivitas", options = ["Active", "Balanced", "Strict"], group = G1)
+useReversal = input.bool(true, "Zona + BOS/CHoCH", group = G1)
+useZoneMarket = input.bool(true, "Entry rejection zona", group = G1)
+useMicroPullback = input.bool(false, "Scalp lawan H1/H4", group = G1)
+adaptiveFrequency = input.bool(true, "Setup aktif native", group = G1)
+methodMomentum = input.bool(true, "Momentum M5-D1", group = G1)
+directionMode = input.string("Ikuti tren", "Mode arah sinyal", options = ["Ikuti tren", "Reverse penuh (lama)"], tooltip = "Tren: arah setup. Reverse: balik arah+TP/SL; dapat diblokir tren.", group = G1)
+bool reverseOutput = directionMode == "Reverse penuh (lama)"
+outputTrendGuard = input.bool(false, "Veto tren output (ketat)", group = G1)
+scalpEntryGuard = input.bool(true, "Scalp guard + retry", group = G1)
+scalpFreshSetup = input.bool(true, "Scalp: setup baru sebelum entry ulang", group = G1)
+scalpMomentumConfirm = input.bool(true, "Scalp MOM: base/pullback sebelum impuls", tooltip = "Butuh base atau pullback candle sebelumnya; candle impuls tetap harus terkonfirmasi.", group = G1)
+scalpMomentumMaxStretch = input.float(0.95, "Scalp MOM: maks EMA10 / ATR", minval = 0.5, maxval = 2.0, step = 0.05, group = G1)
+scalpChaseATR = input.float(0.95, "Scalp EMA10 / ATR", minval = 0.6, maxval = 2.2, step = 0.05, group = G1)
+scalpCandleATR = input.float(1.55, "Scalp range / ATR", minval = 1.0, maxval = 2.8, step = 0.05, group = G1)
+momentumSpacing = input.int(2, "Jeda momentum (bar)", minval = 1, maxval = 12, group = G1)
+momentumHTF = input.bool(true, "Momentum H4/D1", group = G1)
+momentumHTFSpacing = input.int(1, "Jeda H4/D1 (bar)", minval = 1, maxval = 6, group = G1)
+momentumLookback = input.int(2, "Pemicu MOM (bar)", minval = 2, maxval = 6, group = G1)
+momentumFastATR = input.float(1.45, "MOM EMA10 / ATR", minval = 0.8, maxval = 3.0, step = 0.05, group = G1)
+activeDevelopingZones = input.bool(true, "Break zona berkembang", tooltip = "Zona berkembang: 2 close + impuls + RR/SL.", group = G1)
+adaptiveRiskFloor = input.bool(true, "SL adaptif ATR", tooltip = "Active: floor pip dibatasi 1 ATR; struktur, RR dan biaya tetap diuji.", group = G1)
+guardZones = input.bool(true, "Filter S/R lawan", group = G1)
+tf1 = input.timeframe("60", "TF trend utama", group = G1)
+tf2 = input.timeframe("240", "TF trend besar", group = G1)
+pivotLen = input.int(4, "Pivot kiri/kanan", minval = 2, maxval = 20, group = G1)
+cooldown = input.int(0, "Jeda exit (menit)", minval = 0, group = G1)
+useSession = input.bool(false, "Batasi sesi entry", group = G1)
+sessionHours = input.session("0700-2300", "Sesi entry", group = G1)
+tz = input.string("Asia/Jakarta", "Zona waktu sesi/reset", group = G1)
+startTest = input.time(timestamp("01 Jan 2025 00:00 +0700"), "Mulai ledger", group = G1)
+lossSideBars = input.int(2, "Jeda loss scalp (bar native)", minval = 0, maxval = 60, group = G1)
+streakPauseBars = input.int(4, "Jeda ekstra SL beruntun (bar native)", minval = 1, maxval = 60, tooltip = "Blokir semua entry (BUY & SELL) selama N bar native jika terjadi >= 2 SL beruntun.", group = G1)
+minBodyATR = input.float(0.14, "Min body / ATR", minval = 0, maxval = 0.8, step = 0.02, group = G1)
+
+
+string G3 = "03 Broker"
+instrument = input.string("Auto", "Jenis instrumen", options = ["Auto", "Gold USD", "Other"], group = G3)
+costPrice = input.float(0.30, "Biaya spread/komisi round-trip ($)", minval = 0, step = 0.05, group = G3)
+slippagePrice = input.float(0.05, "Slippage stop/market exit ($)", minval = 0, step = 0.01, tooltip = "Penalti slippage satu arah untuk eksekusi SL, Cut Loss, dan gap stop (tidak dihitung ganda dengan spread).", group = G3)
+
+string G4 = "04 Proxy makro"
+useMacro = input.bool(true, "DXY + US10Y untuk gold", group = G4)
+dxySymbol = input.symbol("TVC:DXY", "Simbol dolar", group = G4)
+yieldSymbol = input.symbol("TVC:US10Y", "Simbol yield", group = G4)
+macroRelation = input.string("Auto USD", "Relasi terhadap USD", options = ["Auto USD", "Inverse", "Direct", "Off"], group = G4)
+
+string G5 = "05 News manual"
+news1 = input.bool(false, "Aktifkan news 1", group = G5)
+newsTime1 = input.time(timestamp("01 Jan 2027 20:30 +0700"), "Waktu rilis 1", group = G5)
+news2 = input.bool(false, "Aktifkan news 2", group = G5)
+newsTime2 = input.time(timestamp("01 Jan 2027 22:00 +0700"), "Waktu rilis 2", group = G5)
+news3 = input.bool(false, "Aktifkan news 3", group = G5)
+newsTime3 = input.time(timestamp("02 Jan 2027 02:00 +0700"), "Waktu rilis 3", group = G5)
+newsBefore = input.int(45, "Blok pra-news (menit)", minval = 0, group = G5)
+newsAfter = input.int(60, "Blok pascanews (menit)", minval = 15, group = G5)
+
+string G6 = "06 Tampilan"
+showZones = input.bool(true, "Zona TF chart", group = G6)
+showStructure = input.bool(false, "Label struktur", group = G6)
+showEMA = input.bool(true, "EMA20/50/200", group = G6)
+// Legacy SIM ledger is internal-only from v1.22.5; it never renders trade labels/levels.
+visibleHistoryLimit = input.int(110, "Maks label hasil", minval = 30, maxval = 220, group = G6)
+showStatsTable = input.bool(true, "Tabel Statistik & Validasi Permanen", group = G6)
+statsTablePos = input.string(" kanan_bawah", "Posisi Tabel Statistik", options = [" kanan_bawah", " kiri_bawah", " kanan_atas"], group = G6)
+
+
+string G7 = "07 MTF"
+showMTFMap = input.bool(true, "Peta M5-W1", group = G7)
+showMTFLabels = input.bool(true, "Label ACTIVE MTF", group = G7)
+resolvedHistoryDays = input.int(21, "Hist hasil (hari)", minval = 1, maxval = 60, group = G7)
+scalpSignalHours = input.int(8, "Scalp aktif (jam)", minval = 1, maxval = 24, group = G7)
+intradaySignalHours = input.int(72, "Intraday aktif (jam)", minval = 12, maxval = 168, group = G7)
+swingSignalDays = input.int(14, "Swing aktif (hari)", minval = 3, maxval = 60, group = G7)
+goldPipSize = input.float(0.10, "Gold harga/pip", minval = 0.01, maxval = 1.0, step = 0.01, group = G7)
+scalpMinPips = input.int(30, "Scalp min pip", minval = 10, maxval = 100, group = G7)
+intradayMinPips = input.int(100, "Intraday min pip", minval = 50, maxval = 400, group = G7)
+swingMinPips = input.int(400, "Swing min pip", minval = 200, maxval = 1200, group = G7)
+goldenScoreMin = input.int(78, "Min GOLDEN", minval = 65, maxval = 95, group = G7)
+goodScoreMin = input.int(64, "Min GOOD", minval = 50, maxval = 85, group = G7)
+scalpConflictGuard = input.bool(true, "Blok konflik M5/M15", group = G7)
+mtfBreakoutDefense = input.bool(true, "Trend Defense", group = G7)
+smartCutLoss = input.bool(true, "Smart Cut Loss (Label Biru)", tooltip = "Tahan posisi selama struktur/EMA50/peluang masih mendukung profit; hanya cut loss (biru) jika struktur & peluang benar-benar patah.", group = G7)
+smartCutMinR = input.float(0.45, "Smart Cut: min rugi (R)", minval = 0.25, maxval = 0.85, step = 0.05, group = G7)
+scalpDefenseR = input.float(0.38, "Defense scalp (R)", minval = 0.15, maxval = 0.90, step = 0.05, group = G7)
+scalpFlipR = input.float(0.38, "FLIP scalp min loss (R)", minval = 0.20, maxval = 0.95, step = 0.05, group = G7)
+intradayDefenseR = input.float(0.35, "Defense intraday (R)", minval = 0.15, maxval = 0.90, step = 0.05, group = G7)
+swingDefenseR = input.float(0.38, "Defense swing (R)", minval = 0.20, maxval = 1.20, step = 0.05, group = G7)
+
+string G8 = "08 Konfluensi"
+ctxFilter = input.bool(true, "Filter konfluensi", group = G8)
+htfVeto = input.bool(false, "Veto arah TF atas (ketat)", group = G8)
+macroVeto = input.bool(false, "Veto makro (ketat)", group = G8)
+sessionFilter = input.bool(true, "Sesi/rollover scalp", group = G8)
+ctxMinScore = input.int(55, "Min konteks", minval = 40, maxval = 85, group = G8)
+htfStretchMax = input.float(1.6, "EMA20 / ATR", minval = 0.8, maxval = 3.0, step = 0.1, group = G8)
+scalpStopATR = input.float(1.00, "SL scalp minimum / ATR", minval = 0.4, maxval = 3.5, step = 0.05, group = G8)
+scalpM5ExtraATR = input.float(0.10, "Tambahan SL M5 / ATR", minval = 0.0, maxval = 0.8, step = 0.05, group = G8)
+intradayStopATR = input.float(1.05, "SL intraday / ATR", minval = 0.4, maxval = 2.5, step = 0.05, group = G8)
+swingStopATR = input.float(1.10, "SL swing / ATR", minval = 0.4, maxval = 2.5, step = 0.05, group = G8)
+showLedger = input.bool(true, "Hist hasil", group = G8)
+showSkipped = input.bool(false, "Tampilkan SKIP", group = G8)
+
+string G9 = "09 Risiko"
+classicMinNetRR = input.float(1.10, "Min net RR", minval = 0.5, maxval = 2.5, step = 0.05, group = G9)
+classicMaxRiskATR = input.float(3.8, "Maks SL / ATR", minval = 1.5, maxval = 8, step = 0.25, group = G9)
+srBufferATR = input.float(0.28, "Buffer SL / ATR", minval = 0.1, maxval = 0.8, step = 0.05, group = G9)
+scalpStructureSL = input.bool(true, "Scalp SL: pullback + zona", group = G9)
+scalpSLBufferATR = input.float(0.32, "Buffer scalp / ATR", minval = 0.1, maxval = 1.5, step = 0.05, group = G9)
+srClusterATR = input.float(0.75, "Cluster / ATR", minval = 0.2, maxval = 1.5, step = 0.05, group = G9)
+srMinRoomATR = input.float(0.45, "Ruang lawan / ATR", minval = 0.2, maxval = 1.5, step = 0.05, group = G9)
+showActiveAreas = input.bool(true, "Area TP/SL ACTIVE", group = G9)
+activeAreaBars = input.int(18, "Area (bar)", minval = 5, maxval = 100, group = G9)
+activeAreaScope = input.string("Semua", "Area horizon", options = ["Semua", "Scalp", "Intraday", "Swing"], group = G9)
+
+
+string G10 = "10 Metode"
+regimeRouterOnly = input.bool(true, "Router Rezim 3-Metode Inti (v2.0)", tooltip = "Pisahkan pasar menjadi TREND, RANGE, dan TRANSITION, serta prioritaskan Breakout Continuation, Trend Pullback EMA20, dan With-Trend Sweep Reclaim (eliminasi counter-trend sweep yang merugikan).", group = G10)
+bool multiSetup = true // One visible native router; no legacy fallback bypasses method audit.
+methodBreakout = input.bool(true, "Breakout", group = G10)
+methodCandles = input.bool(true, "Pola candle", group = G10)
+methodEMAReject = input.bool(true, "Rejection EMA", group = G10)
+methodRetest = input.bool(true, "Retest S/R", group = G10)
+methodSweep = input.bool(true, "Sweep + reclaim", group = G10)
+methodTwoCandle = input.bool(true, "Dua candle", group = G10)
+contextPolicy = input.string("Adaptif", "Kebijakan HTF", options = ["Adaptif", "Ketat"], group = G10)
+
+
+string G11 = "11 Audit"
+nativeTrendOnly = input.bool(true, "Searah TF native", group = G11)
+allowTrendShift = input.bool(true, "Trend shift EMA/DMI", group = G11)
+methodStructure = input.bool(true, "HL/LH", group = G11)
+methodRange = input.bool(true, "Range rejection", group = G11)
+methodTrendline = input.bool(true, "Trendline breakout + struktur", group = G11)
+methodVWAP = input.bool(true, "VWAP M5-H1", group = G11)
+learnMethods = input.bool(true, "Audit adaptif native", group = G11)
+perfWindow = input.int(12, "Sampel metode/TF", minval = 6, maxval = 30, group = G11)
+perfMinSamples = input.int(5, "Min sampel", minval = 3, maxval = 12, group = G11)
+perfMinWinrate = input.float(45, "Min WR + net R negatif", minval = 10, maxval = 70, step = 5, group = G11)
+perfLossStreak = input.int(2, "Streak loss untuk blok", minval = 2, maxval = 6, group = G11)
+perfPauseBars = input.int(4, "Jeda metode (bar)", minval = 2, maxval = 72, group = G11)
+perfProbeScore = input.int(74, "Min skor uji ulang", minval = 65, maxval = 96, group = G11)
+
+string G12 = "12 Performa"
+nativeHistoryBars = input.int(6000, "Hist native (bar/TF)", minval = 600, maxval = 12000, step = 100, group = G12)
+
+
+string G13 = "13 Peta"
+showPossibleMap = input.bool(true, "Peta possible entry", group = G13)
+showPossiblePaths = input.bool(true, "Jalur target", group = G13)
+possibleBothSides = input.bool(true, "Skenario dua sisi", group = G13)
+possibleWidthATR = input.float(0.16, "Lebar entry / ATR", minval = 0.05, maxval = 0.35, step = 0.01, group = G13)
+possibleReachATR = input.float(6.0, "Jangkauan zona / ATR", minval = 1, maxval = 12, step = 0.5, group = G13)
+possibleBars = input.int(12, "Peta (bar)", minval = 3, maxval = 40, group = G13)
+showTFBias = input.bool(true, "Skor tujuh TF", group = G13)
+strongOnlyZones = input.bool(true, "Hanya zona kuat", group = G13)
+showZoneHistory = input.bool(false, "Hist S/R TF chart", group = G13)
+zoneHistoryLimit = input.int(8, "Maks hist S/R", minval = 2, maxval = 12, group = G13)
+strongZoneMin = input.int(70, "Min skor zona", minval = 70, maxval = 90, group = G13)
+strongZoneLimit = input.int(8, "Maks zona chart", minval = 8, maxval = 32, group = G13)
+zoneInvalidATR = input.float(8.0, "Arsip jarak / ATR", minval = 4, maxval = 30, group = G13)
+zoneInvalidBars = input.int(24, "Arsip close jauh", minval = 6, maxval = 200, group = G13)
+zoneMaxFlips = input.int(3, "Arsip maks flip", minval = 2, maxval = 8, group = G13)
+zoneWeakAge = input.int(720, "Arsip umur lemah", minval = 120, maxval = 3000, group = G13)
+riskUpgradeFrom = input.time(timestamp("01 Oct 2026 11:20 +0700"), "Mulai cluster SL", group = G13)
+
+string G14 = "14 Breakout"
+breakCloses = input.int(2, "Close breakout", minval = 2, maxval = 4, group = G14)
+breakBuffer = input.float(0.15, "Buffer breakout / ATR", minval = 0.05, maxval = 0.50, step = 0.05, group = G14)
+breakBody = input.float(0.30, "Min body / ATR", minval = 0.15, maxval = 1, step = 0.05, group = G14)
+breakChase = input.float(0.85, "Jarak break / ATR", minval = 0.40, maxval = 2.5, step = 0.1, group = G14)
+flipWindow = input.int(16, "Tunggu retest (bar)", minval = 3, maxval = 60, group = G14)
+strengthTests = input.int(3, "Min reaksi S/R", minval = 3, maxval = 6, group = G14)
+showBreakEvents = input.bool(false, "Penanda BREAK", group = G14)
+breakMarkerSpacing = input.int(8, "Jeda BREAK (bar)", minval = 3, maxval = 30, group = G14)
+breakEntryRoute = input.string("Kelanjutan atau retest", "Jalur entry breakout", options = ["Kelanjutan atau retest", "Retest saja"], group = G14)
+breakRequireStrong = input.bool(true, "Break wajib zona kuat", group = G14)
+breakConfirmBars = input.int(3, "Konfirmasi retest (bar)", minval = 1, maxval = 6, group = G14)
+breakMinRR = input.float(1.10, "Min RR break/retest", minval = 1.00, maxval = 2.0, step = 0.05, group = G14)
+breakMaxCandle = input.float(2.00, "Maks candle break / ATR", minval = 1.0, maxval = 3.0, step = 0.1, group = G14)
+breakFailureBars = input.int(3, "Gagal break (bar)", minval = 1, maxval = 6, group = G14)
+sdImpulse = input.float(1.20, "Min impuls S/D / ATR", minval = 0.8, maxval = 3, step = 0.1, group = G14)
+showPatternNotes = input.bool(false, "Rinci pola di label", group = G14)
+forecastBars = input.int(4, "Skenario (bar/TF)", minval = 2, maxval = 12, group = G14)
+fundamentalView = input.string("Netral", "Bias manual", options = ["Netral", "Bullish", "Bearish"], group = G14)
+fundamentalFrom = input.time(timestamp("03 Oct 2026 00:00 +0700"), "Manual sejak", group = G14)
+fundamentalUntil = input.time(timestamp("04 Oct 2026 00:00 +0700"), "Manual sampai", group = G14)
+fundamentalNote = input.string("", "Sumber manual", group = G14)
+fundamentalWeight = input.int(10, "Bobot manual", minval = 0, maxval = 15, group = G14)
+
+string G15 = "15 Gap"
+showOpenGaps = input.bool(true, "Gap OPEN", group = G15)
+gapMinATR = input.float(0.15, "Lebar gap minimum / ATR", minval = 0.05, maxval = 1, step = 0.05, group = G15)
+gapLimit = input.int(12, "Maks gap", minval = 2, maxval = 20, group = G15)
+gapLifeBars = input.int(240, "Umur gap (bar)", minval = 20, maxval = 1000, group = G15)
+
+string G16 = "16 Adaptive Structure"
+shockATR = input.float(3.1, "Blok spike / ATR sebelumnya", minval = 2, maxval = 6, step = 0.1, group = G16)
+shockPause = input.int(1, "Tunggu setelah spike (bar)", minval = 0, maxval = 10, group = G16)
+smcLife = input.int(80, "Umur OB/FVG/breaker (bar)", minval = 10, maxval = 300, group = G16)
+manageBE = input.bool(true, "BE + Profit Lock otomatis", group = G16)
+beAtR = input.float(0.82, "BE: aktif minimal R", minval = 0.40, maxval = 3, step = 0.05, group = G16)
+beLockR = input.float(0.25, "BE: kunci profit (R)", minval = 0.0, maxval = 1.0, step = 0.05, tooltip = "Kunci profit di atas biaya saat mendekati TP lalu tertahan.", group = G16)
+manageTrail = input.bool(true, "Trailing struktur + R-lock", group = G16)
+trailAtR = input.float(0.95, "Trailing: aktif minimal R", minval = 0.60, maxval = 4, step = 0.05, group = G16)
+trailATR = input.float(1.25, "Jarak trailing ATR", minval = 0.6, maxval = 4, step = 0.05, group = G16)
+compactLabels = input.bool(true, "Label ringkas + E/TP/SL tetap lengkap", group = G16)
+enableAlerts = input.bool(true, "Alert entry TF chart", group = G16)
+fastPullback = input.bool(true, "Pullback cepat EMA10", group = G16)
+microRetest = input.bool(true, "Break + retest mikro M5/M15", group = G16)
+microRetestBars = input.int(8, "Umur retest mikro (bar)", minval = 2, maxval = 20, group = G16)
+scalpMinNetRR = input.float(1.05, "Min net RR scalp Active", minval = 0.90, maxval = 2.50, step = 0.05, group = G16)
+scalpTargetR = input.float(1.18, "Target R scalp Active", minval = 1.00, maxval = 3.0, step = 0.05, group = G16)
+
+// Shared label constructor retains geometry, style, size, alignment and tooltip.
+f_label(int xX, float yX, string captionX, string locX = xloc.bar_index, string styleX = label.style_label_left, color colX = color.gray, string sizeX = size.tiny, string alignX = text.align_center, string hintX = "") =>
+    label.new(xX, yX, captionX, xloc = locX, style = styleX, color = colX, textcolor = color.white, size = sizeX, textalign = alignX, tooltip = hintX)
+
+f_dir(float fast, float slow, float price) =>
+    fast > slow and price > fast ? 1 : fast < slow and price < fast ? -1 : 0
+f_num(float x) =>
+    na(x) ? "n/a" : str.tostring(x, "#.##")
+f_price(float x) =>
+    na(x) ? "-" : str.tostring(x, format.mintick)
+f_round(float x) =>
+    math.round(x / syminfo.mintick) * syminfo.mintick
+f_levels(float entryX, float tpX, float slX) =>
+    "E " + f_price(entryX) + "\nTP " + f_price(tpX) + " | SL " + f_price(slX)
+f_adverse_r(int sideX, float entryX, float slX, float pxX) =>
+    float riskX = math.abs(slX - entryX)
+    float adverseX = sideX == 1 ? entryX - pxX : sideX == -1 ? pxX - entryX : 0.0
+    riskX > syminfo.mintick ? math.max(0.0, adverseX) / riskX : 0.0
+
+f_defense_now(int sideX, float entryX, float slX, int horizonX, int fastSideX, float fastScoreX, float pxX, int htfRefX) =>
+    float cutR = horizonX == 1 ? scalpDefenseR : horizonX == 2 ? intradayDefenseR : swingDefenseR
+    bool oppositeFast = mtfBreakoutDefense and sideX != 0 and fastSideX != 0 and fastSideX == -sideX and fastScoreX >= goodScoreMin
+    // v1.23.0: the next higher timeframe turning against the trade is also an analytical invalidation.
+    bool htfAgainst = mtfBreakoutDefense and sideX != 0 and htfRefX == -sideX
+    barstate.isconfirmed and oppositeFast and htfAgainst and f_adverse_r(sideX, entryX, slX, pxX) >= cutR
+f_newsWindow(bool enabled, int eventTime) =>
+    enabled and time_close >= eventTime - newsBefore * 60000 and time < eventTime + newsAfter * 60000
+
+
+f_clamp(float x, float lo, float hi) =>
+    math.max(lo, math.min(hi, x))
+f_tier(float score) =>
+    score >= goldenScoreMin ? "GOLDEN" : score >= goodScoreMin ? "GOOD" : "NORMAL"
+f_horizon_name(int horizon) =>
+    horizon == 1 ? "SCALP M5-M15" : horizon == 2 ? "INTRADAY M30-H4" : "SWING D1-W1"
+
+
+bool isGold = instrument == "Gold USD" or (instrument == "Auto" and (str.contains(syminfo.ticker, "XAU") or str.contains(syminfo.ticker, "GOLD")) and syminfo.currency == "USD")
+float atr = ta.atr(14)
+float ema20 = ta.ema(close, 20)
+float ema50 = ta.ema(close, 50)
+float ema200 = ta.ema(close, 200)
+float rsi = ta.rsi(close, 14)
+float vwap = ta.vwap(hlc3)
+[dxy, dxyEMA, dxyTime] = request.security(dxySymbol, tf1, [close[1], ta.ema(close, 20)[1], time_close[1]], lookahead = timeframe.in_seconds(tf1) >= timeframe.in_seconds() ? barmerge.lookahead_on : barmerge.lookahead_off, ignore_invalid_symbol = true, calc_bars_count = 400)
+[bondYield, yieldEMA, yieldTime] = request.security(yieldSymbol, tf1, [close[1], ta.ema(close, 20)[1], time_close[1]], lookahead = timeframe.in_seconds(tf1) >= timeframe.in_seconds() ? barmerge.lookahead_on : barmerge.lookahead_off, ignore_invalid_symbol = true, calc_bars_count = 400)
+bool macroFresh = not na(dxy) and time_close - dxyTime < 72 * 3600000
+bool yieldFresh = not na(bondYield) and time_close - yieldTime < 72 * 3600000
+int usdRelation = macroRelation == "Inverse" ? -1 : macroRelation == "Direct" ? 1 : macroRelation == "Off" ? 0 : isGold or syminfo.currency == "USD" ? -1 : syminfo.basecurrency == "USD" ? 1 : 0
+float macroBias = useMacro and macroFresh ? math.sign(dxy - dxyEMA) * usdRelation : 0
+if useMacro and isGold and yieldFresh and usdRelation != 0
+    macroBias := (macroBias - math.sign(bondYield - yieldEMA)) / 2
+// v1.23.0: daily macro proxy for INTRADAY/SWING confluence (DXY and US10Y versus their own EMA20).
+[dxyD, dxyDEMA, dxyDTime] = request.security(dxySymbol, "D", [close[1], ta.ema(close, 20)[1], time_close[1]], lookahead = timeframe.in_seconds("D") >= timeframe.in_seconds() ? barmerge.lookahead_on : barmerge.lookahead_off, ignore_invalid_symbol = true, calc_bars_count = 300)
+[yieldD, yieldDEMA, yieldDTime] = request.security(yieldSymbol, "D", [close[1], ta.ema(close, 20)[1], time_close[1]], lookahead = timeframe.in_seconds("D") >= timeframe.in_seconds() ? barmerge.lookahead_on : barmerge.lookahead_off, ignore_invalid_symbol = true, calc_bars_count = 300)
+bool macroDFresh = not na(dxyD) and time_close - dxyDTime < 100 * 3600000
+bool yieldDFresh = not na(yieldD) and time_close - yieldDTime < 100 * 3600000
+float macroBiasD = useMacro and macroDFresh ? math.sign(dxyD - dxyDEMA) * usdRelation : 0
+if useMacro and isGold and yieldDFresh and usdRelation != 0
+    macroBiasD := (macroBiasD - math.sign(yieldD - yieldDEMA)) / 2
+
+// Chart overlays only; native zone/state engines below own signal decisions.
+float ph = ta.pivothigh(high, pivotLen, pivotLen)
+float pl = ta.pivotlow(low, pivotLen, pivotLen)
+float resistance = ta.valuewhen(not na(ph), ph, 0)
+float support = ta.valuewhen(not na(pl), pl, 0)
+bool sweepUp = barstate.isconfirmed and low < support and close > support and close > open
+bool sweepDown = barstate.isconfirmed and high > resistance and close < resistance and close < open
+bool newsWindow = f_newsWindow(news1, newsTime1) or f_newsWindow(news2, newsTime2) or f_newsWindow(news3, newsTime3)
+
+
+f_mtf_life_ms(int horizon) =>
+    horizon == 1 ? scalpSignalHours * 3600000 : horizon == 2 ? intradaySignalHours * 3600000 : swingSignalDays * 86400000
+
+// Causal bar-touch evaluator with gap-open priority, slippage on stop fills, and conservative SL priority on ambiguous dual-touch bars.
+f_touch_bar(int sideX, float slX, float tpX, float oX, float hX, float lX) =>
+    bool validX = sideX != 0 and not na(slX) and not na(tpX) and not na(hX) and not na(lX)
+    bool slHitX = validX and (sideX == 1 ? lX <= slX : hX >= slX)
+    bool tpHitX = validX and (sideX == 1 ? hX >= tpX : lX <= tpX)
+    bool gapSLX = validX and not na(oX) and (sideX == 1 ? oX <= slX : oX >= slX)
+    bool gapTPX = validX and not na(oX) and (sideX == 1 ? oX >= tpX : oX <= tpX)
+    // Code: 1 = TP, -1 = SL, 2 = Dual Touch (conservative SL priority unless resolved by LTF sub-bars)
+    int codeX = gapSLX ? -1 : gapTPX ? 1 : slHitX and tpHitX ? 2 : slHitX ? -1 : tpHitX ? 1 : 0
+    float stopSlipX = sideX * slippagePrice
+    float fillX = gapSLX ? (oX - stopSlipX) : gapTPX ? oX : (slHitX and tpHitX) ? (slX - stopSlipX) : slHitX ? (slX - stopSlipX) : tpHitX ? tpX : na
+    [codeX, fillX]
+
+
+f_setup_name(int methodX) =>
+    var array<string> namesX = str.split("CLASSIC|PULLBACK|FAST EMA|BREAKOUT|CANDLE|SWEEP|MOMENTUM|2-CANDLE|RETEST|HL/LH|RANGE|TRENDLINE|VWAP", "|")
+    array.get(namesX, methodX >= 1 and methodX <= 12 ? methodX : 0)
+
+// Ranking uses ONLY already-resolved native outcomes. It neither replaces
+// the entry guards nor forces a quota of signals for an enabled method.
+f_candidate_rank(float qualityX, float netRRX, int countX, float netX, int streakX) =>
+    float historyPenaltyX = countX >= 3 ? math.min(16.0, math.max(0.0, -netX / math.max(countX, 1)) * 9.0 + streakX * 3.0) : streakX * 3.0
+    qualityX + math.min(4.0, math.max(0.0, netRRX - classicMinNetRR) * 4.0) - historyPenaltyX
+
+// Causal method evaluation: only resolved native plans enter these statistics.
+// A pause never removes already-recorded losses or chooses with future outcomes.
+f_method_bad(int nX, float winsX, float netX, int streakX) =>
+    streakX >= perfLossStreak or (nX >= math.min(perfMinSamples, perfWindow) and 100.0 * winsX / math.max(nX, 1) < perfMinWinrate and netX < 0)
+
+f_method_gate(int nX, float winsX, float netX, int streakX, int untilX, int nowX, int barMsX, float qualityX) =>
+    bool badX = f_method_bad(nX, winsX, netX, streakX)
+    bool pausedX = learnMethods and nowX < untilX
+    bool probeX = learnMethods and badX and not pausedX
+    // Recover causally after the fixed pause; old bad results cannot impose an
+    // unreachable score forever. Losses remain in the rolling sample.
+    float recoveryX = untilX > 0 ? math.max(0.0, (nowX - untilX) / math.max(float(barMsX), 1.0)) : 0.0
+    float probeFloorX = mode == "Strict" ? 76.0 : adaptiveFrequency and mode == "Active" ? 68.0 : 72.0
+    float probeRequiredX = math.max(probeFloorX, perfProbeScore - recoveryX * (perfProbeScore - probeFloorX) / math.max(perfPauseBars, 1))
+    not pausedX and (not probeX or qualityX >= probeRequiredX)
+
+f_record_method(int methodX, float resultRX, int nowX, int barMsX, array<float> ringX, array<int> countX, array<int> headX, array<float> winsX, array<float> netX, array<int> streakX, array<int> untilX) =>
+    if methodX >= 1 and methodX <= 12 and not na(resultRX)
+        int kX = methodX - 1
+        int nX = array.get(countX, kX)
+        int headV = array.get(headX, kX)
+        int ix = kX * perfWindow + headV
+        float removedX = nX >= perfWindow ? array.get(ringX, ix) : 0.0
+        float newNet = array.get(netX, kX) - removedX + resultRX
+        float newWins = array.get(winsX, kX) - (nX >= perfWindow and removedX > 0 ? 1 : 0) + (resultRX > 0 ? 1 : 0)
+        int newCount = math.min(perfWindow, nX + 1)
+        int newStreak = resultRX < 0 ? array.get(streakX, kX) + 1 : 0
+        array.set(ringX, ix, resultRX)
+        array.set(headX, kX, (headV + 1) % perfWindow)
+        array.set(countX, kX, newCount)
+        array.set(winsX, kX, newWins)
+        array.set(netX, kX, newNet)
+        array.set(streakX, kX, newStreak)
+        if learnMethods and resultRX < 0 and f_method_bad(newCount, newWins, newNet, newStreak)
+            array.set(untilX, kX, nowX + perfPauseBars * barMsX)
+    0
+
+f_candle_patterns(float cX, float oX, float hX, float lX, float pcX, float poX, float phX, float plX, float ppcX, float ppoX, float pphX, float pplX, float atrX) =>
+    float rangeX = math.max(hX - lX, syminfo.mintick)
+    float bodyX = math.abs(cX - oX)
+    float upperX = hX - math.max(oX, cX)
+    float lowerX = math.min(oX, cX) - lX
+    float priorBodyX = math.abs(pcX - poX)
+    bool hammerX = lowerX >= math.max(2.0 * bodyX, 0.50 * rangeX) and upperX <= 0.22 * rangeX and cX >= lX + 0.65 * rangeX
+    bool starX = upperX >= math.max(2.0 * bodyX, 0.50 * rangeX) and lowerX <= 0.22 * rangeX and cX <= lX + 0.35 * rangeX
+    bool engulfB = cX > oX and pcX < poX and oX <= pcX + 0.03 * atrX and cX >= poX and bodyX >= 0.25 * atrX
+    bool engulfS = cX < oX and pcX > poX and oX >= pcX - 0.03 * atrX and cX <= poX and bodyX >= 0.25 * atrX
+    bool morningX = ppcX < ppoX and priorBodyX < 0.5 * math.abs(ppcX - ppoX) and cX > oX and cX > (ppoX + ppcX) * 0.5 and bodyX >= 0.2 * atrX
+    bool eveningX = ppcX > ppoX and priorBodyX < 0.5 * math.abs(ppcX - ppoX) and cX < oX and cX < (ppoX + ppcX) * 0.5 and bodyX >= 0.2 * atrX
+    // Piercing/dark-cloud allow an FX-style open near the previous close.
+    bool piercingX = pcX < poX and cX > oX and oX <= pcX + 0.05 * atrX and cX > (poX + pcX) * 0.5 and cX < poX and bodyX >= 0.2 * atrX
+    bool cloudX = pcX > poX and cX < oX and oX >= pcX - 0.05 * atrX and cX < (poX + pcX) * 0.5 and cX > poX and bodyX >= 0.2 * atrX
+    bool haramiB = pcX < poX and cX > oX and oX > pcX and cX < poX and bodyX < priorBodyX * 0.65
+    bool haramiS = pcX > poX and cX < oX and oX < pcX and cX > poX and bodyX < priorBodyX * 0.65
+    bool tweezerB = math.abs(lX - plX) <= 0.12 * atrX and pcX < poX and cX > oX and lowerX >= 0.25 * rangeX
+    bool tweezerS = math.abs(hX - phX) <= 0.12 * atrX and pcX > poX and cX < oX and upperX >= 0.25 * rangeX
+    bool soldiersX = cX > oX and pcX > poX and ppcX > ppoX and cX > pcX and pcX > ppcX and oX >= poX and oX <= pcX and poX >= ppoX and poX <= ppcX and bodyX >= 0.2 * atrX and upperX <= 0.25 * rangeX
+    bool crowsX = cX < oX and pcX < poX and ppcX < ppoX and cX < pcX and pcX < ppcX and oX <= poX and oX >= pcX and poX <= ppoX and poX >= ppcX and bodyX >= 0.2 * atrX and lowerX <= 0.25 * rangeX
+    [hammerX, starX, engulfB, engulfS, morningX, eveningX, piercingX, cloudX, haramiB, haramiS, tweezerB, tweezerS, soldiersX, crowsX]
+
+// S/R helpers: nearest level strictly above / below a reference price.
+// Bounded equivalent loops replace four unrolled tests in each S/R helper.
+// Missing levels and strict above/below comparisons match v1.23.14.
+f_near_level(int sideX, float refX, float v1, float v2, float v3, float v4) =>
+    float bestX = na
+    for vX in array.from(v1, v2, v3, v4)
+        if not na(vX) and sideX * (vX - refX) > 0 and (na(bestX) or sideX * (vX - bestX) < 0)
+            bestX := vX
+    bestX
+f_near_above(float refX, float v1, float v2, float v3, float v4) =>
+    f_near_level(1, refX, v1, v2, v3, v4)
+f_near_below(float refX, float v1, float v2, float v3, float v4) =>
+    f_near_level(-1, refX, v1, v2, v3, v4)
+f_cluster_anchor(int sideX, float anchorX, float atrX, float v1, float v2, float v3, float v4) =>
+    float outX = anchorX
+    float reachX = srClusterATR * atrX
+    for vX in array.from(v1, v2, v3, v4)
+        if not na(vX) and sideX * (anchorX - vX) >= -0.15 * atrX and sideX * (anchorX - vX) <= reachX
+            outX := sideX == 1 ? math.min(outX, vX) : math.max(outX, vX)
+    outX
+
+// Extend a scalp anchor only to nearby, held native structure. No future pivots.
+f_scalp_anchor(int sideX, float anchorX, float pullLoX, float pullHiX, float nearX, float farX, float aX) =>
+    float outX = sideX == 1 ? math.min(anchorX, pullLoX) : math.max(anchorX, pullHiX)
+    if not na(nearX) and not na(farX) and sideX * (nearX - farX) >= 0 and math.abs(nearX - outX) <= srClusterATR * aX
+        outX := sideX == 1 ? math.min(outX, farX) : math.max(outX, farX)
+    outX
+
+f_setup_plan(int sideX, int methodX, float qualityX, float entryX, float anchorX, float atrX, float wallX, float stretchX, float candleRangeX, int horizonX) =>
+    float minD = (horizonX == 1 ? scalpMinPips : horizonX == 2 ? intradayMinPips : swingMinPips) * goldPipSize
+    // Apply adaptive ATR risk floor across ALL timeframes (M5 through W1) so fixed pip floors never inflate SL/TP distance.
+    if adaptiveRiskFloor and (adaptiveFrequency or mode != "Strict")
+        minD := math.min(minD, (horizonX == 1 ? 0.75 : horizonX == 2 ? 0.85 : 0.95) * atrX)
+    float atrMult = horizonX == 1 ? scalpStopATR + (timeframe.in_seconds() <= 300 ? scalpM5ExtraATR : 0.0) : horizonX == 2 ? intradayStopATR : swingStopATR
+    float baseBufferX = horizonX == 1 and scalpStructureSL ? math.max(srBufferATR, scalpSLBufferATR) : srBufferATR
+    float wickNoiseX = math.min(0.15, math.max(0.0, candleRangeX / atrX - 1.0) * 0.10)
+    float bufferX = (baseBufferX + wickNoiseX) * atrX
+    float structDistX = math.max(0.0, sideX * (entryX - anchorX))
+    // Keep structural SL span tight and proportional to the current swing (1.35-2.00 ATR) so TP is close enough to get hit on the very first impulse wave!
+    float maxAnchorSpanX = (horizonX == 1 ? 1.35 : horizonX == 2 ? 1.70 : 2.10) * atrX
+    float effectiveStructX = math.min(structDistX, maxAnchorSpanX)
+    float riskX = math.max(minD, math.max(atrMult * atrX, effectiveStructX + bufferX))
+    float rawStopX = entryX - sideX * riskX
+    float slX = (sideX == 1 ? math.floor(rawStopX / syminfo.mintick) : math.ceil(rawStopX / syminfo.mintick)) * syminfo.mintick
+    riskX := math.abs(entryX - slX)
+    float maxHorizonRiskATR = horizonX == 1 ? math.min(classicMaxRiskATR, 2.40) : horizonX == 2 ? math.min(classicMaxRiskATR, 2.90) : classicMaxRiskATR
+    bool activeScalpX = horizonX == 1 and adaptiveFrequency and mode == "Active"
+    float minNetX = activeScalpX ? scalpMinNetRR : horizonX == 2 ? math.min(classicMinNetRR, 1.10) : math.min(classicMinNetRR, 1.15)
+    // Cost-adjusted floor; do not advertise RR that is only valid before costs.
+    if methodX == 3 or methodX == 8
+        minNetX := math.max(minNetX, breakMinRR)
+    // Snappy wave-fitted target RR so trades hit WIN TP directly instead of stalling and reversing into TRAIL/BE.
+    float rrX = activeScalpX ? (methodX == 10 ? math.min(scalpTargetR, 1.12) : scalpTargetR) : methodX == 10 ? 1.15 : methodX == 6 ? 1.22 : horizonX == 2 ? 1.22 : 1.30
+    float minRewardX = minNetX * (riskX + costPrice) + costPrice
+    float maxReachATR = (horizonX == 1 ? 1.65 : horizonX == 2 ? 2.15 : 2.70) * atrX
+    float targetRewardX = math.min(rrX * riskX, math.max(minRewardX + syminfo.mintick, maxReachATR))
+    float rewardX = math.max(targetRewardX, minRewardX + syminfo.mintick)
+    // Only clamp reward to wallX when wallX still leaves at least minRewardX room; otherwise let the setup target minRewardX unless wallX is closer than srMinRoomATR.
+    if guardZones and not na(wallX) and sideX * (wallX - entryX) > 0
+        float wallRoomX = math.max(0.0, sideX * (wallX - entryX) - 0.15 * atrX)
+        if wallRoomX >= minRewardX
+            rewardX := math.min(rewardX, wallRoomX)
+    float tpX = f_round(entryX + sideX * rewardX)
+    float netX = (sideX * (tpX - entryX) - costPrice) / math.max(riskX + costPrice, syminfo.mintick)
+    float maxStretchX = methodX == 5 or methodX == 10 ? 2.10 : methodX == 6 ? (horizonX == 1 ? scalpMomentumMaxStretch : momentumFastATR) : horizonX == 1 and scalpEntryGuard ? scalpChaseATR : 1.85
+    float requiredQX = 52.0 // Model-specific threshold belongs to the router.
+    bool planOKX = true
+    if na(atrX) or atrX <= 0 or na(anchorX) or na(entryX)
+        planOKX := false
+    else if qualityX < requiredQX
+        planOKX := false
+    else if candleRangeX > (horizonX == 1 and scalpEntryGuard ? scalpCandleATR : horizonX == 1 ? 2.6 : 3.2) * atrX or stretchX > maxStretchX
+        planOKX := false
+    else if riskX > maxHorizonRiskATR * atrX
+        planOKX := false
+    else if costPrice > riskX * 0.25
+        planOKX := false
+    else if guardZones and not na(wallX) and sideX * (wallX - entryX) > 0 and sideX * (wallX - entryX) < srMinRoomATR * atrX
+        planOKX := false
+    else if sideX * (entryX - slX) <= 0 or sideX * (tpX - entryX) <= 0 or netX + 0.000001 < minNetX
+        planOKX := false
+    [planOKX, slX, tpX, netX]
+
+f_native_probability(float trendX, float pressureX, float exhaustionX, float structureX, float reactionX, float roomX, bool chopX) =>
+    // Multi-bar structure, exhaustion and target room describe the next leg.
+    // No single candle's colour is used as a direction forecast.
+    float signedX = 0.20 * trendX + 0.10 * pressureX + 0.10 * exhaustionX + 0.25 * structureX + 0.20 * reactionX + 0.15 * roomX
+    f_clamp(50.0 + 38.0 * signedX * (chopX ? 0.65 : 1.0), 15.0, 85.0)
+
+f_pattern_text(bool bull, bool hammer, bool star, bool engulfB, bool engulfS, bool morning, bool evening, bool piercing, bool cloud, bool haramiB, bool haramiS, bool tweezerB, bool tweezerS, bool soldiers, bool crows) =>
+    string t = ""
+    array<bool> flags = bull ? array.from(hammer, engulfB, morning, piercing, haramiB, tweezerB, soldiers) : array.from(star, engulfS, evening, cloud, haramiS, tweezerS, crows)
+    array<string> names = str.split(bull ? "Hammer|Engulf B|Morning star|Piercing|Bull harami|Tweezer bottom|3 soldiers" : "Shooting star|Engulf S|Evening star|Dark cloud|Bear harami|Tweezer top|3 crows", "|")
+    for i = 0 to 6
+        if array.get(flags, i)
+            t += (t == "" ? "" : "\n") + array.get(names, i)
+    t
+
+f_method_explanation(int m) =>
+    var array<string> captionsX = str.split("Candle|Pullback EMA20/zona|Reclaim EMA10/20|Break 2 close/retest|Pola di zona|Sweep reclaim + MSS|Impuls setelah base/pullback|Dua candle + reclaim|Retest zona/mikro|HL/LH terkonfirmasi|Range rejection|Trendline + struktur|VWAP reclaim", "|")
+    array.get(captionsX, m >= 1 and m <= 12 ? m : 0)
+
+// Shared native-zone engine. All inputs are from the previous CLOSED candle.
+// kind 0 = pivot/reaction S/R; kind 1 = compact base + displacement S/D.
+type GGZone
+    int side
+    float lo
+    float hi
+    float a
+    int born
+    int kind = 0
+    int tests = 1
+    float reaction = 0.0
+    bool armed = false
+    bool touched = false
+    int touchedAt = 0
+    int tested = 0
+    int lastSeen = 0
+    int farBars = 0
+    int outside = 0
+    bool impulse = false
+    int acceptedAt = 0
+    bool dormant = false
+    bool retestExpired = false
+    float acceptedGrade = 0.0
+    int flips = 0
+    string role = ""
+    string origin = ""
+
+f_zone_strength(GGZone z) =>
+    z.kind == 1 ? math.max(25.0, 85.0 + 5.0 * math.min(z.reaction, 3) - 15.0 * math.max(0, z.tests - 1)) : math.max(z.tests >= strengthTests ? strongZoneMin : 0.0, math.min(95.0, 30.0 + 14.0 * math.min(z.tests, 4) + 10.0 * math.min(z.reaction, 2)))
+f_zone_is_strong(GGZone z) =>
+    z.kind == 1 ? z.tests <= 2 and f_zone_strength(z) >= strongZoneMin : z.tests >= strengthTests
+f_zone_name(GGZone z) =>
+    z.kind == 1 ? (z.side == 1 ? "DEMAND" : "SUPPLY") : z.role != "" ? z.role : z.side == 1 ? "SUPPORT" : "RESISTANCE"
+f_zone_status(GGZone z) =>
+    z.dormant ? "ARSIP / TUNGGU REAKSI" : z.retestExpired ? "BREAK LAMA / TUNGGU REAKSI" : z.acceptedAt > 0 ? "BREAK / TUNGGU RETEST" : z.outside > 0 ? "UJI TEMBUS " + str.tostring(z.outside) + "/" + str.tostring(breakCloses) : z.kind == 1 ? (z.tests == 1 ? "FRESH" : "MITIGATED " + str.tostring(z.tests - 1)) : f_zone_is_strong(z) ? "KUAT" : "LEMAH"
+
+f_add_zone(array<GGZone> zones, int side, float lo, float hi, float a, int now, int kind, float reaction) =>
+    bool merged = false
+    if not na(lo) and not na(hi) and hi > lo and a > 0
+        for z in zones
+            // Never move boundaries after a breach has started. No automatic role change.
+            if not z.dormant and z.kind == kind and z.side == side and z.acceptedAt == 0 and z.outside == 0 and lo <= z.hi + 0.10 * a and hi >= z.lo - 0.10 * a and math.max(hi, z.hi) - math.min(lo, z.lo) <= 0.85 * a
+                if kind == 0
+                    z.lo := math.min(z.lo, lo)
+                    z.hi := math.max(z.hi, hi)
+                    z.reaction := math.max(z.reaction, reaction)
+                merged := true
+                break
+        if not merged
+            if array.size(zones) >= 96
+                int removeAt = 0
+                int oldest = now
+                bool sleepingFound = false
+                for j = 0 to array.size(zones) - 1
+                    GGZone candidate = array.get(zones, j)
+                    if candidate.dormant and (not sleepingFound or candidate.lastSeen < oldest)
+                        sleepingFound := true
+                        oldest := candidate.lastSeen
+                        removeAt := j
+                array.remove(zones, removeAt)
+            GGZone z = GGZone.new(side, lo, hi, a, now)
+            z.kind := kind
+            z.reaction := reaction
+            z.lastSeen := now
+            z.tested := now
+            array.push(zones, z)
+    0
+
+f_update_zones(array<GGZone> zones, int now, int barMs, float c, float o, float h, float l, float a) =>
+    int breakSide = 0
+    float breakLo = na
+    float breakHi = na
+    float breakGrade = 0.0
+    int retestSide = 0
+    float retestLo = na
+    float retestHi = na
+    float supportMid = na
+    float supportLo = na
+    float resistanceMid = na
+    float resistanceHi = na
+    float reactionBias = 0.0
+    float retestGrade = 0.0
+    if array.size(zones) > 0 and not na(a) and a > 0
+        for i = array.size(zones) - 1 to 0
+            GGZone z = array.get(zones, i)
+            float scale = math.max(a, z.a)
+            bool touch = l <= z.hi and h >= z.lo
+            float departure = z.side == 1 ? c - z.hi : z.lo - c
+            bool outside = z.side == 1 ? c < z.lo - breakBuffer * scale : c > z.hi + breakBuffer * scale
+            bool reclaim = z.side == 1 ? c > z.hi + breakBuffer * scale : c < z.lo - breakBuffer * scale
+            float cr = math.max(h - l, syminfo.mintick)
+            bool impulsive = -z.side * (c - o) >= breakBody * a and (z.side == 1 ? c <= l + 0.30 * cr : c >= h - 0.30 * cr)
+            // A sleeping S/R may hold on the touch candle or its next 4 candles.
+            if z.dormant and z.kind == 0 and touch and not z.touched
+                z.touched := true
+                z.touchedAt := now
+            bool recentArchiveTouch = z.touched and now - z.touchedAt <= 4 * barMs
+            bool revivedHold = z.dormant and z.kind == 0 and (touch or recentArchiveTouch) and departure >= 0.35 * scale and z.side * (c - o) >= 0.10 * a and (z.side == 1 ? c >= l + 0.60 * cr : c <= l + 0.40 * cr)
+            if revivedHold
+                z.dormant := false
+                z.acceptedAt := 0
+                z.retestExpired := false
+                z.outside := 0
+                z.impulse := false
+                z.farBars := 0
+                z.flips := 0
+                if now - z.tested >= 3 * barMs
+                    z.tests += 1
+                    z.tested := now
+                z.reaction := math.max(z.reaction, departure / scale)
+                z.armed := false
+                z.touched := false
+                reactionBias := z.side
+            if touch
+                z.lastSeen := now
+            z.outside := outside ? z.outside + 1 : 0
+            z.impulse := outside ? z.impulse or impulsive : false
+            bool justAccepted = (not z.dormant or recentArchiveTouch) and z.acceptedAt == 0 and z.outside >= breakCloses and z.impulse
+            if justAccepted
+                z.dormant := false
+                z.acceptedAt := now
+                z.retestExpired := false
+                z.acceptedGrade := f_zone_is_strong(z) ? f_zone_strength(z) : -f_zone_strength(z)
+                z.armed := false
+                z.touched := false
+                float distance = z.side == 1 ? z.lo - c : c - z.hi
+                float oldDistance = na(breakLo) ? 1e10 : breakSide == 1 ? c - breakHi : breakLo - c
+                if breakSide == 0 or (z.acceptedGrade > 0 and breakGrade <= 0) or ((z.acceptedGrade > 0) == (breakGrade > 0) and distance < oldDistance)
+                    breakSide := -z.side
+                    breakLo := z.lo
+                    breakHi := z.hi
+                    breakGrade := z.acceptedGrade
+            bool retest = z.acceptedAt > 0 and now > z.acceptedAt and touch and outside and -z.side * (c - o) >= 0.15 * a and (z.side == 1 ? c <= l + 0.40 * cr : c >= l + 0.60 * cr) and (z.side == 1 ? h <= z.hi + 0.35 * scale : l >= z.lo - 0.35 * scale)
+            if retest
+                float originalGrade = z.acceptedGrade
+                if z.kind == 1
+                    z.origin := z.side == 1 ? "ex DEMAND" : "ex SUPPLY"
+                z.side := -z.side
+                z.kind := 0
+                z.role := z.side == 1 ? "RBS" : "SBR"
+                z.flips := z.retestExpired or z.dormant ? 1 : z.flips + 1
+                z.dormant := false
+                z.farBars := 0
+                z.acceptedAt := 0
+                z.retestExpired := false
+                z.outside := 0
+                z.impulse := false
+                z.tests := 1
+                z.reaction := math.max(0.0, (z.side == 1 ? c - z.hi : z.lo - c) / scale)
+                z.tested := now
+                z.touched := false
+                z.armed := false
+                if retestSide == 0 or (originalGrade > 0 and retestGrade <= 0) or ((originalGrade > 0) == (retestGrade > 0) and math.abs(originalGrade) > math.abs(retestGrade))
+                    retestSide := z.side
+                    retestLo := z.lo
+                    retestHi := z.hi
+                    retestGrade := originalGrade
+            else if not z.dormant and reclaim and z.acceptedAt > 0
+                // Failed breakout: restore original role, no flip and no deleted loss.
+                z.acceptedAt := 0
+                z.retestExpired := false
+                z.outside := 0
+                z.impulse := false
+                z.armed := false
+            if not z.dormant and not revivedHold and not retest and z.acceptedAt == 0 and z.outside == 0
+                if z.armed and touch
+                    z.touched := true
+                    z.touchedAt := now
+                    z.armed := false
+                if z.touched and now - z.touchedAt <= 4 * barMs and departure >= 0.35 * scale and now - z.tested >= 3 * barMs
+                    z.tests += 1
+                    z.tested := now
+                    z.touched := false
+                    z.reaction := math.max(z.reaction, departure / scale)
+                    reactionBias := z.side
+                if z.touched and now - z.touchedAt > 4 * barMs
+                    z.touched := false
+                if now - z.tested <= 4 * barMs
+                    z.reaction := math.max(z.reaction, math.max(0.0, departure / scale))
+                if not touch and departure >= 0.50 * scale and not z.touched
+                    z.armed := true
+            float dist = math.max(z.lo - c, c - z.hi) / scale
+            z.farBars := dist > zoneInvalidATR and not touch ? z.farBars + 1 : 0
+            bool expiredBreak = z.acceptedAt > 0 and now - z.acceptedAt > flipWindow * barMs
+            z.retestExpired := expiredBreak
+            bool invalid = z.farBars >= zoneInvalidBars or z.flips >= zoneMaxFlips or (not f_zone_is_strong(z) and now - z.lastSeen > zoneWeakAge * barMs and dist > 3) or expiredBreak
+            if invalid and not touch and not revivedHold
+                z.dormant := true
+                z.armed := false
+                if not recentArchiveTouch
+                    z.touched := false
+            else if not z.dormant and z.acceptedAt == 0 and z.outside == 0 and f_zone_is_strong(z)
+                if z.side == 1 and z.hi < c and (na(supportMid) or z.hi > supportMid)
+                    supportMid := z.hi
+                    supportLo := z.lo
+                if z.side == -1 and z.lo > c and (na(resistanceMid) or z.lo < resistanceMid)
+                    resistanceMid := z.lo
+                    resistanceHi := z.hi
+    [breakSide, breakLo, breakHi, retestSide, retestLo, retestHi, supportMid, supportLo, resistanceMid, resistanceHi, reactionBias, retestGrade, breakGrade]
+
+// Entry state is separate from the zone's current SBR/RBS role.
+type GGBreakEntry
+    int side = 0
+    float lo = na
+    float hi = na
+    float anchor = na
+    float confirm = na
+    float grade = 0.0
+    int retestAt = 0
+    bool retested = false
+    bool fired = false
+
+f_break_entry(GGBreakEntry p, int now, int barMs, int rawBreak, float rawLo, float rawHi, float rawGrade, int retestSide, float retestLo, float retestHi, float grade, float c, float o, float h, float l, float priorClose, float a, bool trendB, bool trendS, bool regime) =>
+    int entrySide = 0
+    float entryLo = na
+    float entryHi = na
+    float entryAnchor = na
+    float entryGrade = 0.0
+    bool activeZoneX = activeDevelopingZones and adaptiveFrequency and mode == "Active"
+    float signalRangeX = math.max(h - l, syminfo.mintick)
+    bool developingBreakX = activeZoneX and math.abs(rawGrade) >= 50 and regime and (rawBreak == 1 ? trendB : trendS) and rawBreak * (c - o) >= math.max(breakBody, 0.30) * a and (rawBreak == 1 ? c >= l + 0.65 * signalRangeX : c <= l + 0.35 * signalRangeX)
+    bool developingRetestX = activeZoneX and math.abs(grade) >= 50 and regime and (retestSide == 1 ? trendB : trendS)
+    if rawBreak != 0
+        // A new accepted break creates a new epoch; events need no entry approval.
+        p.side := 0
+        p.fired := false
+        p.retested := false
+        p.lo := rawLo
+        p.hi := rawHi
+        p.grade := math.abs(rawGrade)
+        if breakEntryRoute != "Retest saja" and (not breakRequireStrong or rawGrade > 0 or developingBreakX)
+            p.side := rawBreak
+            p.anchor := rawBreak == 1 ? rawLo : rawHi
+            p.confirm := rawBreak == 1 ? rawHi : rawLo
+            p.retestAt := now
+    if retestSide != 0
+        bool alreadyUsed = p.fired and p.lo == retestLo and p.hi == retestHi
+        if not alreadyUsed and (not breakRequireStrong or grade > 0 or developingRetestX)
+            p.side := retestSide
+            p.lo := retestLo
+            p.hi := retestHi
+            p.anchor := retestSide == 1 ? math.min(retestLo, l) : math.max(retestHi, h)
+            p.confirm := retestSide == 1 ? h : l
+            p.grade := math.abs(grade)
+            p.retestAt := now
+            p.retested := true
+            p.fired := false
+    if p.side != 0
+        float edge = p.side == 1 ? p.hi : p.lo
+        float cr = math.max(h - l, syminfo.mintick)
+        bool expired = now - p.retestAt > breakConfirmBars * barMs
+        bool failed = p.side * (c - edge) < -0.05 * a
+        bool afterTrigger = p.retested ? now > p.retestAt : now >= p.retestAt
+        bool follow = afterTrigger and p.side * (c - p.confirm) > (p.retested ? 0.03 : breakBuffer) * a and p.side * (c - priorClose) > 0
+        bool clean = p.side * (c - o) >= math.max(p.retested ? 0.20 : breakBody, minBodyATR) * a and (p.side == 1 ? c >= l + 0.65 * cr : c <= l + 0.35 * cr)
+        bool spike = cr > breakMaxCandle * a or math.abs(o - priorClose) > 0.35 * a
+        bool chase = p.side * (c - edge) > breakChase * a
+        bool trend = p.side == 1 ? trendB : trendS
+        if expired or failed
+            p.side := 0
+        else if afterTrigger
+            if follow and clean and not spike and not chase and trend and regime
+                entrySide := p.side
+                entryLo := p.lo
+                entryHi := p.hi
+                entryAnchor := p.anchor
+                entryGrade := p.grade
+                p.side := 0
+                p.fired := true
+    [entrySide, entryLo, entryHi, entryAnchor, entryGrade]
+
+f_pack_zones(array<GGZone> zones) =>
+    string txt = ""
+    // Transport only the current map. Historical lifecycle remains native.
+    if bar_index >= last_bar_index - 2
+        for z in zones
+            if not z.dormant
+                txt += (txt == "" ? "" : ";") + str.tostring(z.born) + "," + str.tostring(z.side) + "," + str.tostring(z.lo, format.mintick) + "," + str.tostring(z.hi, format.mintick) + "," + str.tostring(f_zone_strength(z), "#") + "," + f_zone_name(z) + "," + f_zone_status(z) + "," + str.tostring(z.tests) + "," + str.tostring(z.acceptedAt) + "," + (z.origin == "" ? "-" : z.origin) + "," + (f_zone_is_strong(z) ? "1" : "0")
+    txt
+
+
+// History exists only in the chart call. Frozen records are visual context.
+type GGZoneHistory
+    int zoneBorn
+    int side
+    float lo
+    float hi
+    int first
+    int last
+    int seen
+    string name
+    bool active = true
+
+f_update_zone_history(array<GGZoneHistory> history, array<GGZone> zones, int now) =>
+    for z in zones
+        if z.kind == 0 and f_zone_is_strong(z) and not z.dormant and z.acceptedAt == 0
+            int match = -1
+            if array.size(history) > 0
+                for i = array.size(history) - 1 to 0
+                    GGZoneHistory r = array.get(history, i)
+                    if r.active and r.zoneBorn == z.born and r.side == z.side and r.name == f_zone_name(z) and r.lo == z.lo and r.hi == z.hi
+                        match := i
+                        break
+            if match >= 0
+                GGZoneHistory r = array.get(history, match)
+                r.last := now
+                r.seen := now
+            else
+                array.push(history, GGZoneHistory.new(z.born, z.side, z.lo, z.hi, now, now, now, f_zone_name(z)))
+    // A confirmed break or sleep ends the old interval at its known close.
+    // A later revival creates a new interval; it never fills the intervening gap.
+    for r in history
+        if r.active and r.seen != now
+            r.active := false
+            r.last := now
+    while array.size(history) > 128
+        int removeAt = 0
+        for i = 0 to array.size(history) - 1
+            GGZoneHistory r = array.get(history, i)
+            if not r.active
+                removeAt := i
+                break
+        array.remove(history, removeAt)
+    0
+
+type GGMarkerGate
+    int lastBar = -1000000
+    int side = 0
+    float lo = na
+    float hi = na
+
+f_break_marker(GGMarkerGate gate, bool enabled, int side, float grade, float lo, float hi, float a, int nowBar) =>
+    int out = 0
+    if enabled and side != 0 and grade > 0 and not na(a) and a > 0
+        int age = nowBar - gate.lastBar
+        bool sameBand = gate.side == side and not na(gate.lo) and lo <= gate.hi + 0.20 * a and hi >= gate.lo - 0.20 * a
+        bool duplicate = sameBand and age < 3 * breakMarkerSpacing
+        if age >= breakMarkerSpacing and not duplicate
+            out := side
+            gate.lastBar := nowBar
+            gate.side := side
+            gate.lo := lo
+            gate.hi := hi
+    out
+
+f_zone_snapshot(array<GGZoneHistory> zoneHistoryX = na) =>
+    // One bounded zone pool in each evaluated timeframe context.
+    int srcTime = time_close[1]
+    float c = close[1]
+    float o = open[1]
+    float h = high[1]
+    float l = low[1]
+    float a = ta.atr(14)[1]
+    float bd = math.abs(c - o)
+    float cr = math.max(h - l, syminfo.mintick)
+    bool cleanB = c > o and c >= l + 0.60 * cr
+    bool cleanS = c < o and c <= l + 0.40 * cr
+    float phX = ta.pivothigh(high, pivotLen, pivotLen)[1]
+    float plX = ta.pivotlow(low, pivotLen, pivotLen)[1]
+    int nativeMsX = int(timeframe.in_seconds() * 1000)
+    var array<GGZone> zonesX = array.new<GGZone>()
+    [brSideX, brLoX, brHiX, rtSideX, rtLoX, rtHiX, zoneSupportX, zoneSupportLoX, zoneResistanceX, zoneResistanceHiX, zoneReactionX, rtGradeX, brGradeX] = f_update_zones(zonesX, srcTime, nativeMsX, c, o, h, l, a)
+    // Pivot S/R: confirmed swing reaction; a candidate is weak until repeat tests.
+    float pivotAtrX = ta.atr(14)[pivotLen + 1]
+    float rightHiX = ta.highest(high[1], pivotLen + 1)
+    float rightLoX = ta.lowest(low[1], pivotLen + 1)
+    if not na(plX) and c > plX
+        f_add_zone(zonesX, 1, plX, plX + 0.18 * pivotAtrX, pivotAtrX, srcTime, 0, math.max(0.0, (rightHiX - plX) / pivotAtrX))
+    if not na(phX) and c < phX
+        f_add_zone(zonesX, -1, phX - 0.18 * pivotAtrX, phX, pivotAtrX, srcTime, 0, math.max(0.0, (phX - rightLoX) / pivotAtrX))
+    // S/D has a DIFFERENT detector: 1-3 compact base candles + displacement.
+    int baseN = 0
+    float baseHi = na
+    float baseLo = na
+    for k = 2 to 4
+        bool compact = high[k] - low[k] <= 0.85 * a and math.abs(close[k] - open[k]) <= 0.45 * a
+        if compact and baseN == k - 2
+            baseN += 1
+            baseHi := na(baseHi) ? high[k] : math.max(baseHi, high[k])
+            baseLo := na(baseLo) ? low[k] : math.min(baseLo, low[k])
+    if baseN > 0 and baseHi - baseLo <= 1.10 * a and bd >= sdImpulse * a
+        if cleanB and c > baseHi + breakBuffer * a
+            f_add_zone(zonesX, 1, baseLo, baseHi, a, srcTime, 1, (c - baseHi) / a)
+        if cleanS and c < baseLo - breakBuffer * a
+            f_add_zone(zonesX, -1, baseLo, baseHi, a, srcTime, 1, (baseLo - c) / a)
+    if not na(zoneHistoryX)
+        f_update_zone_history(zoneHistoryX, zonesX, srcTime)
+    [brSideX, brLoX, brHiX, rtSideX, rtLoX, rtHiX, zoneSupportX, zoneSupportLoX, zoneResistanceX, zoneResistanceHiX, zoneReactionX, rtGradeX, brGradeX, f_pack_zones(zonesX)]
+
+// Context is sampled INSIDE the signal timeframe, never using host-chart [1].
+// Every requested series is offset once. These requests are evaluated on every
+// native bar, including history, before their values are latched at entry.
+f_closed_context_trend() =>
+    float e20X = ta.ema(close, 20)
+    float e50X = ta.ema(close, 50)
+    float hiX = ta.highest(high[1], 6)
+    float loX = ta.lowest(low[1], 6)
+    bool upX = close > e20X and e20X > e20X[2] and (e20X > e50X or (allowTrendShift and close > hiX))
+    bool downX = close < e20X and e20X < e20X[2] and (e20X < e50X or (allowTrendShift and close < loX))
+    int sideX = upX ? 1 : downX ? -1 : 0
+    [sideX[1], time_close[1]]
+
+f_native_context(int asOfX, int horizonX) =>
+    float secX = timeframe.in_seconds()
+    string parent1X = secX <= 300 ? "15" : secX <= 900 ? "60" : secX <= 3600 ? "240" : secX <= 14400 ? "D" : "W"
+    string parent2X = secX <= 300 ? "60" : secX <= 900 ? "240" : secX <= 3600 ? "D" : "W"
+    [p1X, t1X] = request.security(syminfo.tickerid, parent1X, f_closed_context_trend(), lookahead = barmerge.lookahead_on, calc_bars_count = 700)
+    [p2X, t2X] = request.security(syminfo.tickerid, parent2X, f_closed_context_trend(), lookahead = barmerge.lookahead_on, calc_bars_count = 700)
+    // Macro source must also be at least as high as the native timeframe.
+    // Intraday/swing use daily context, or weekly on W1. No single-intrabar LTF sampling.
+    bool alignedMacroX = timeframe.in_seconds(tf1) >= secX and timeframe.in_seconds(tf1) % secX == 0
+    string macroTFX = horizonX == 1 ? (alignedMacroX ? tf1 : "60") : secX <= 86400 ? "D" : timeframe.period
+    [usdX, usdEMAX, usdTX] = request.security(dxySymbol, macroTFX, [close[1], ta.ema(close, 20)[1], time_close[1]], lookahead = barmerge.lookahead_on, ignore_invalid_symbol = true, calc_bars_count = 400)
+    [yieldX, yieldEMAX, yieldTX] = request.security(yieldSymbol, macroTFX, [close[1], ta.ema(close, 20)[1], time_close[1]], lookahead = barmerge.lookahead_on, ignore_invalid_symbol = true, calc_bars_count = 400)
+    int r1X = not na(t1X) and t1X <= asOfX ? nz(p1X) : 0
+    int r2X = not na(t2X) and t2X <= asOfX ? nz(p2X) : 0
+    int maxAgeX = int(math.max(100 * 3600000.0, timeframe.in_seconds(macroTFX) * 2000.0))
+    bool usdOKX = useMacro and usdRelation != 0 and not na(usdX) and not na(usdEMAX) and not na(usdTX) and usdTX <= asOfX and asOfX - usdTX < maxAgeX
+    bool yieldOKX = useMacro and isGold and usdRelation != 0 and not na(yieldX) and not na(yieldEMAX) and not na(yieldTX) and yieldTX <= asOfX and asOfX - yieldTX < maxAgeX
+    int countX = (usdOKX ? 1 : 0) + (yieldOKX ? 1 : 0)
+    float totalX = (usdOKX ? math.sign(usdX - usdEMAX) * usdRelation : 0.0) + (yieldOKX ? -math.sign(yieldX - yieldEMAX) : 0.0)
+    [r1X, r2X, countX > 0 ? totalX / countX : 0.0, countX]
+
+// Confluence score 0-100 + veto reason ("" = pass).
+// 40% own-TF technical quality, 30% higher-TF agreement, 20% macro proxy (DXY / US10Y), 10% price location.
+f_context_verdict(int horX, int sideX, float qX, float posX, int bornX, int methodX, int r1, int r2, float macroRaw) =>
+    bool breakTradeX = methodX == 3 or methodX == 8
+    float v1 = r1 == sideX ? 1.0 : r1 == 0 ? 0.3 : -1.0
+    float v2 = r2 == sideX ? 1.0 : r2 == 0 ? 0.3 : -1.0
+    float htf = 0.6 * v1 + 0.4 * v2
+    float macS = sideX * nz(macroRaw, 0.0)
+    float ps = sideX == 1 ? posX : 1.0 - posX
+    bool localScalp = horX == 1 and (methodX == 4 or methodX == 5 or methodX == 10 or methodX == 11) and nz(qX) >= 76
+    bool adaptiveHTFX = contextPolicy == "Adaptif" and nz(qX) >= 80
+    float locS = na(ps) ? 0.0 : ps <= 0.60 ? 1.0 : ps <= 0.80 ? 0.4 : ps <= 0.92 ? -0.1 : -0.7
+    if multiSetup and contextPolicy == "Adaptif" and (na(ps) or ps <= 0.90)
+        locS := math.max(locS, 0.3) // Do not penalize normal trend continuation on M5-W1 unless at >90% extreme range edge.
+    int hUtc = hour(bornX, "UTC")
+    bool rollover = sessionFilter and (hour(bornX, "America/New_York") == 17 or hour(bornX, "America/New_York") == 16 and minute(bornX, "America/New_York") >= 45)
+    bool thinAsia = sessionFilter and hUtc < 7 and methodX != 10
+    float score = 40.0 * nz(qX, 0.0) / 100.0 + 30.0 * (htf + 1.0) / 2.0 + 20.0 * (macS + 1.0) / 2.0 + 10.0 * (locS + 1.0) / 2.0
+    if contextPolicy == "Adaptif"
+        score := 0.80 * nz(qX, 0.0) + 12.0 * (htf + 1.0) / 2.0 + 3.0 * (macS + 1.0) / 2.0 + 5.0 * (locS + 1.0) / 2.0
+    score := score - (thinAsia and horX == 1 ? 2.0 : 0.0)
+    score := math.max(0.0, math.min(100.0, score))
+    string why = ""
+    if outputTrendGuard and r1 == -sideX and r2 == -sideX
+        why := "OUTPUT: dua TF atas lawan"
+    else if htfVeto and r1 == -sideX and (horX == 1 or (not localScalp and not adaptiveHTFX))
+        why := "TF atas lawan"
+    else if macroVeto and useMacro and (horX >= 2 or (breakTradeX and not (adaptiveFrequency and mode == "Active" and contextPolicy == "Adaptif"))) and macS <= -0.99
+        why := "Makro lawan"
+    else if rollover and horX == 1
+        why := "Rollover"
+    else if ((news1 and bornX >= newsTime1 - newsBefore * 60000 and bornX <= newsTime1 + newsAfter * 60000) or (news2 and bornX >= newsTime2 - newsBefore * 60000 and bornX <= newsTime2 + newsAfter * 60000) or (news3 and bornX >= newsTime3 - newsBefore * 60000 and bornX <= newsTime3 + newsAfter * 60000)) and horX <= 2
+        why := "Jendela news"
+    else if (not multiSetup or contextPolicy == "Ketat") and horX >= 2 and not na(ps) and ps > 0.95
+        why := "Kejar harga"
+    else if score < ctxMinScore
+        why := "Skor rendah"
+    [score, why]
+
+type GGNativeState
+    int srcTime
+    int bias
+    int sig
+    float q
+    int liveSide
+    int liveBorn
+    float liveEntry
+    float liveSL
+    float liveTP
+    float liveQ
+    float livePos
+    int resBorn
+    int resTime
+    int resCode
+    int resSide
+    float resE
+    float resSL
+    float resTP
+    float resQ
+    float resPos
+    float resPrice
+    int liveMethod
+    int resMethod
+    float biasUp
+    string liveNote
+    string resNote
+    string zoneMap
+    float initialSL = na
+    float liveContext = na
+    string liveWhy = ""
+    float resContext = na
+    string resWhy = ""
+    int stopMovedAt = 0
+    int liveRegime = 0
+    int resRegime = 0
+
+f_failed_break(int methodX, int sideX, int ageX, int barMsX, float loX, float hiX, float cX, float aX) =>
+    bool outsideX = sideX == 1 ? cX < hiX - breakBuffer * aX : cX > loX + breakBuffer * aX
+    bool outsidePriorX = sideX == 1 ? close[2] < hiX - breakBuffer * aX : close[2] > loX + breakBuffer * aX
+    sideX != 0 and ageX > 0 and (methodX == 3 or methodX == 8) and ageX <= breakFailureBars * barMsX and outsideX and (timeframe.in_seconds() > 900 or outsidePriorX)
+
+f_mtf_native_state() =>
+    // Evaluated INSIDE the requested context, never from the chart or loop index.
+    // M5/M15 = scalp, H1/H4 = intraday, D1/W1 = swing (same as v1.23.11).
+    int horizon = timeframe.in_seconds() <= 900 ? 1 : timeframe.in_seconds() <= 14400 ? 2 : 3
+    var array<float> methodRing = array.new<float>(12 * perfWindow, 0.0)
+    var array<int> methodCount = array.new<int>(12, 0)
+    var array<int> methodHead = array.new<int>(12, 0)
+    var array<float> methodWins = array.new<float>(12, 0.0)
+    var array<float> methodNet = array.new<float>(12, 0.0)
+    var array<int> methodStreak = array.new<int>(12, 0)
+    var array<int> methodUntil = array.new<int>(12, 0)
+    // Signal discovery stays on the previous CLOSED native-timeframe candle.
+    // This avoids repainting entries, while a separate live-touch layer below
+    // invalidates an already-active signal as soon as its current bar hits SL/TP.
+    int srcTime = time_close[1]
+    float c = close[1]
+    float o = open[1]
+    float h = high[1]
+    float l = low[1]
+    float atrSeriesX = ta.atr(14)
+    float a = atrSeriesX[1]
+    float atr2X = atrSeriesX[2]
+    float atr3X = atrSeriesX[3]
+    float e10s = ta.ema(close, 10)
+    float e20s = ta.ema(close, 20)
+    float e50s = ta.ema(close, 50)
+    float e200s = ta.ema(close, 200)
+    float e10 = e10s[1]
+    float e20 = e20s[1]
+    float e50 = nz(e50s[1], e20s[1])
+    float e200 = nz(e200s[1], e50)
+    float vwapSeriesX = ta.vwap(hlc3)
+    float rsiSeriesX = ta.rsi(close, 14)
+    float rs = rsiSeriesX[1]
+    float rs2X = rsiSeriesX[2]
+    float rs3X = rsiSeriesX[3]
+    [dp0, dm0, ax0] = ta.dmi(14, 14)
+    float ax = ax0[1]
+    bool activeX = adaptiveFrequency and mode == "Active"
+    float cr = math.max(h - l, syminfo.mintick)
+    float bd = math.abs(c - o)
+    float upperW = h - math.max(o, c)
+    float lowerW = math.min(o, c) - l
+    float p4h = ta.highest(high[2], 4)
+    float p4l = ta.lowest(low[2], 4)
+    float p6h = ta.highest(high[2], 6)
+    float p6l = ta.lowest(low[2], 6)
+    bool bullStack = c > e20 and e20 > e50 and e20 > e20s[3]
+    bool bearStack = c < e20 and e20 < e50 and e20 < e20s[3]
+    bool shiftUpX = allowTrendShift and c > p6h and c > e20 and e20 > e20s[3]
+    bool shiftDownX = allowTrendShift and c < p6l and c < e20 and e20 < e20s[3]
+    int ownTrendX = bullStack or shiftUpX ? 1 : bearStack or shiftDownX ? -1 : 0
+    int bias = ownTrendX
+    bool sweepB = l < p6l and c > p6l and lowerW >= 0.25 * cr
+    bool sweepS = h > p6h and c < p6h and upperW >= 0.25 * cr
+    float tfSecX = timeframe.in_seconds()
+    int windowX = tfSecX <= 300 ? 16 : tfSecX <= 900 ? 24 : tfSecX <= 3600 ? 32 : 40
+    float pathX = ta.sma(math.abs(ta.change(close)), 12)[1] * 12
+    float effX = math.abs(c - close[13]) / math.max(pathX, syminfo.mintick)
+    bool trendRegimeX = ax >= 22 and effX >= 0.30 and math.abs(e20 - e50) > 0.12 * a
+    float rangeHiX = ta.highest(high[2], windowX)
+    float rangeLoX = ta.lowest(low[2], windowX)
+    bool rangeRegimeX = ax < 20 and effX < 0.30 and math.abs(e20 - e50) < 0.75 * a and rangeHiX - rangeLoX >= 3 * a
+    bool cleanB = c > o and bd >= math.max(minBodyATR, 0.14) * a and c >= l + 0.62 * cr
+    bool cleanS = c < o and bd >= math.max(minBodyATR, 0.14) * a and c <= l + 0.38 * cr
+    float momentumHighX = ta.highest(high[2], momentumLookback)
+    float momentumLowX = ta.lowest(low[2], momentumLookback)
+    float fastStretchB = math.max(0.0, (c - e10) / math.max(a, syminfo.mintick))
+    float fastStretchS = math.max(0.0, (e10 - c) / math.max(a, syminfo.mintick))
+    float slowStretchB = math.max(0.0, (c - e50) / math.max(a, syminfo.mintick))
+    float slowStretchS = math.max(0.0, (e50 - c) / math.max(a, syminfo.mintick))
+    float phX = ta.pivothigh(high, pivotLen, pivotLen)[1]
+    float plX = ta.pivotlow(low, pivotLen, pivotLen)[1]
+    var float wallHighX = na
+    var float wallLowX = na
+    var float prevHighX = na
+    var float prevLowX = na
+    var int wallHighBarX = na
+    var int wallLowBarX = na
+    var int prevHighBarX = na
+    var int prevLowBarX = na
+    if not na(phX)
+        prevHighBarX := wallHighBarX
+        wallHighBarX := bar_index - pivotLen - 1
+        prevHighX := wallHighX
+        wallHighX := phX
+    if not na(plX)
+        prevLowBarX := wallLowBarX
+        wallLowBarX := bar_index - pivotLen - 1
+        prevLowX := wallLowX
+        wallLowX := plX
+    int nativeMsX = int(timeframe.in_seconds() * 1000)
+    [brSideX, brLoX, brHiX, rtSideX, rtLoX, rtHiX, zoneSupportX, zoneSupportLoX, zoneResistanceX, zoneResistanceHiX, zoneReactionX, rtGradeX, brGradeX, zoneMapX] = f_zone_snapshot()
+    var GGBreakEntry breakPlanX = GGBreakEntry.new()
+    bool breakBuyTrendX = c > e20 and e10 > e10s[3] and dp0[1] > dm0[1] * 1.05
+    bool breakSellTrendX = c < e20 and e10 < e10s[3] and dm0[1] > dp0[1] * 1.05
+    bool breakRegimeX = (ax >= 16 and effX >= 0.22) or (activeX and ax >= 14 and effX >= 0.18)
+    [breakEntrySideX, breakEntryLoX, breakEntryHiX, breakAnchorX, breakGradeX] = f_break_entry(breakPlanX, srcTime, nativeMsX, brSideX, brLoX, brHiX, brGradeX, rtSideX, rtLoX, rtHiX, rtGradeX, c, o, h, l, close[2], a, breakBuyTrendX, breakSellTrendX, breakRegimeX)
+    bool breakBX = methodBreakout and (not methodRetest or not breakPlanX.retested) and breakEntrySideX == 1
+    bool breakSX = methodBreakout and (not methodRetest or not breakPlanX.retested) and breakEntrySideX == -1
+    bool retestB = methodRetest and breakPlanX.retested and breakEntrySideX == 1
+    bool retestS = methodRetest and breakPlanX.retested and breakEntrySideX == -1
+    float scalpBaseHiX = ta.highest(high[2], 3)
+    float scalpBaseLoX = ta.lowest(low[2], 3)
+    bool scalpBaseX = scalpBaseHiX - scalpBaseLoX <= 1.40 * a and math.abs(close[2] - open[2]) <= 0.60 * a
+    bool scalpGuardX = scalpEntryGuard and horizon == 1
+    // Position of the signal close inside the last 60 native bars (0 = bottom, 1 = top). Used by the confluence engine.
+    float hi60 = nz(ta.highest(high, 60)[1], ta.highest(high, 20)[1])
+    float lo60 = nz(ta.lowest(low, 60)[1], ta.lowest(low, 20)[1])
+    float pos = math.max(0.0, math.min(1.0, (c - lo60) / math.max(hi60 - lo60, syminfo.mintick)))
+
+    float q = bias == 0 ? 0.0 : math.min(100.0, 45.0 + (ax >= 18 ? 15 : 5) + (effX >= 0.30 ? 20 : 10) + (bias == 1 ? c > e200 ? 10 : 0 : c < e200 ? 10 : 0))
+    int sig = 0
+    float signalQ = 0.0
+    float candidateAnchor = na
+    float candidateSL = na
+    float candidateTP = na
+
+    var int lastSignalTime = na
+    var int lastSignalSide = 0
+    var float lastSignalEntry = na
+    var int lastSetupResetB = na
+    var int lastSetupResetS = na
+    // Track consecutive SL hits across BOTH directions to stop whipsaw streaks.
+    var int totalLossStreakX = 0
+    var int sideLossCountX = 0
+    var bool scalpRearmX = true
+    var int lastExitTime = na
+    var int lastSLTime = na
+    var int lastSLSide = 0
+    var float lastSLPrice = na
+    var int lastSLMethod = 0
+    if l <= e10 + 0.15 * a and (c < o or lowerW >= 0.30 * cr)
+        lastSetupResetB := srcTime
+    if h >= e10 - 0.15 * a and (c > o or upperW >= 0.30 * cr)
+        lastSetupResetS := srcTime
+    // Independent methods use only PREVIOUS CLOSED native bars; no GOLDEN tier.
+    int chosenMethod = 0
+    string patternsB = ""
+    string patternsS = ""
+    // v1.40: seven independent routes, with optional legacy continuation variants.
+    // Every observation is from a CLOSED native bar. Pivots are used only after confirmation.
+    float atrBaseX = ta.sma(atrSeriesX, 50)[2]
+    float volRatioX = a / math.max(nz(atrBaseX, a), syminfo.mintick)
+    float volumeBaseX = ta.sma(volume, 20)[2]
+    bool volumeOKX = na(volume[1]) or na(volumeBaseX) or volumeBaseX <= 0 or volume[1] >= volumeBaseX * 0.85
+    bool shockX = cr > shockATR * nz(atr2X, a) or math.abs(o - close[2]) > 0.70 * a or (high[2] - low[2]) > shockATR * nz(atr3X, a)
+    int shockAgeX = nz(ta.barssince(shockX), 10000)
+    bool safeX = not shockX and shockAgeX > shockPause
+    bool londonX = not na(time(timeframe.period, "0800-1700:23456", "Europe/London")[1])
+    bool newYorkX = not na(time(timeframe.period, "0800-1700:23456", "America/New_York")[1])
+    bool rollX = not na(time(timeframe.period, "1645-1815:23456", "America/New_York")[1])
+    bool newsX = (news1 and srcTime >= newsTime1 - newsBefore * 60000 and time[1] < newsTime1 + newsAfter * 60000) or (news2 and srcTime >= newsTime2 - newsBefore * 60000 and time[1] < newsTime2 + newsAfter * 60000) or (news3 and srcTime >= newsTime3 - newsBefore * 60000 and time[1] < newsTime3 + newsAfter * 60000)
+    // Session/day levels are accumulated causally; the current bar is excluded from sweeps.
+    var float dayHiX = na
+    var float dayLoX = na
+    var float prevDayHiX = na
+    var float prevDayLoX = na
+    var float asiaHiX = na
+    var float asiaLoX = na
+    bool newDayX = timeframe.change("D")[1]
+    bool asiaX = not na(time(timeframe.period, "0900-1500:23456", "Asia/Tokyo")[1])
+    if newDayX
+        prevDayHiX := dayHiX
+        prevDayLoX := dayLoX
+        dayHiX := na
+        dayLoX := na
+        asiaHiX := na
+        asiaLoX := na
+    bool eqLowX = not na(prevLowX) and math.abs(wallLowX - prevLowX) <= 0.15 * a
+    bool eqHighX = not na(prevHighX) and math.abs(wallHighX - prevHighX) <= 0.15 * a
+    bool liqBX = sweepB or (l < wallLowX and c > wallLowX) or (l < prevDayLoX and c > prevDayLoX) or (l < asiaLoX and c > asiaLoX)
+    bool liqSX = sweepS or (h > wallHighX and c < wallHighX) or (h > prevDayHiX and c < prevDayHiX) or (h > asiaHiX and c < asiaHiX)
+    dayHiX := na(dayHiX) ? h : math.max(dayHiX, h)
+    dayLoX := na(dayLoX) ? l : math.min(dayLoX, l)
+    if asiaX
+        asiaHiX := na(asiaHiX) ? h : math.max(asiaHiX, h)
+        asiaLoX := na(asiaLoX) ? l : math.min(asiaLoX, l)
+    // A sweep arms a short-lived confirmation, with its own invalidation extreme.
+    var int sweptAtB = na
+    var int sweptAtS = na
+    var float sweptLow = na
+    var float sweptHigh = na
+    var float sweepTriggerB = na
+    var float sweepTriggerS = na
+    // Strict Liquidity Sweep: must sweep a genuine structural/session/range level in Discount (for BUY) or Premium (for SELL), never 4-bar micro-noise at the top of a rally!
+    bool discountZoneB = pos <= 0.58 or l <= e50 + 0.20 * a or zoneReactionX == 1
+    bool premiumZoneS = pos >= 0.42 or h >= e50 - 0.20 * a or zoneReactionX == -1
+    bool majorLiqBX = ((l < wallLowX and c > wallLowX) or (l < prevDayLoX and c > prevDayLoX) or (l < asiaLoX and c > asiaLoX) or (l < rangeLoX + 0.10 * a and c > rangeLoX) or (sweepB and l <= e20 - 0.15 * a)) and discountZoneB
+    bool majorLiqSX = ((h > wallHighX and c < wallHighX) or (h > prevDayHiX and c < prevDayHiX) or (h > asiaHiX and c < asiaHiX) or (h > rangeHiX - 0.10 * a and c < rangeHiX) or (sweepS and h >= e20 + 0.15 * a)) and premiumZoneS
+    if majorLiqBX and lowerW >= 0.24 * cr
+        sweptAtB := bar_index
+        sweptLow := l
+        sweepTriggerB := math.max(o, math.max(open[2], close[2]))
+    if majorLiqSX and upperW >= 0.24 * cr
+        sweptAtS := bar_index
+        sweptHigh := h
+        sweepTriggerS := math.min(o, math.min(open[2], close[2]))
+    bool recentSweepB = not na(sweptAtB) and bar_index - sweptAtB <= 3 and c > sweptLow and l >= sweptLow and discountZoneB
+    bool recentSweepS = not na(sweptAtS) and bar_index - sweptAtS <= 3 and c < sweptHigh and h <= sweptHigh and premiumZoneS
+    // Require genuine reclaim (above EMA10 AND prior high/low with rising/falling RSI) so sweeps never fire at bull distribution tops or bear breakdown bottoms.
+    bool mssB = recentSweepB and c > sweepTriggerB and c > high[2] and c >= e10 and bd >= 0.20 * a and rs > nz(rs2X, 50)
+    bool mssS = recentSweepS and c < sweepTriggerS and c < low[2] and c <= e10 and bd >= 0.20 * a and rs < nz(rs2X, 50)
+    // Operational inducement proxy: minor liquidity swept while the external swing holds.
+    bool inducementB = mssB and sweptLow > wallLowX and ownTrendX == 1
+    bool inducementS = mssS and sweptHigh < wallHighX and ownTrendX == -1
+    [hammerX, starX, engulfB, engulfS, morningX, eveningX, piercingX, cloudX, haramiB, haramiS, tweezerB, tweezerS, soldiersX, crowsX] = f_candle_patterns(c, o, h, l, close[2], open[2], high[2], low[2], close[3], open[3], high[3], low[3], a)
+    bool invertedHammerX = high[2] - math.max(open[2], close[2]) >= 0.55 * (high[2] - low[2]) and close[2] < e20s[2] and cleanB and c > high[2]
+    bool insideX = high[2] < high[3] and low[2] > low[3]
+    bool patternB = hammerX or engulfB or morningX or piercingX or tweezerB or soldiersX or invertedHammerX or (insideX and c > high[3])
+    bool patternS = starX or engulfS or eveningX or cloudX or tweezerS or crowsX or (insideX and c < low[3])
+    patternsB := f_pattern_text(true, hammerX, starX, engulfB, engulfS, morningX, eveningX, piercingX, cloudX, haramiB, haramiS, tweezerB, tweezerS, soldiersX, crowsX)
+    patternsS := f_pattern_text(false, hammerX, starX, engulfB, engulfS, morningX, eveningX, piercingX, cloudX, haramiB, haramiS, tweezerB, tweezerS, soldiersX, crowsX)
+    // Chronological swing leg: low -> high for buy retracements; high -> low for sells.
+    float legSizeX = wallHighX - wallLowX
+    bool bullLegX = wallLowBarX < wallHighBarX and legSizeX > a
+    bool bearLegX = wallHighBarX < wallLowBarX and legSizeX > a
+    float retraceBX = (wallHighX - c) / math.max(legSizeX, syminfo.mintick)
+    float retraceSX = (c - wallLowX) / math.max(legSizeX, syminfo.mintick)
+    bool goldenB = bullLegX and retraceBX >= 0.50 and retraceBX <= 0.65
+    bool goldenS = bearLegX and retraceSX >= 0.50 and retraceSX <= 0.65
+    bool deepB = bullLegX and retraceBX >= 0.705 and retraceBX <= 0.786 and mssB
+    bool deepS = bearLegX and retraceSX >= 0.705 and retraceSX <= 0.786 and mssS
+    // FVG and order block objects expire/invalidate; no retroactive signals.
+    var float fvgLoB = na
+    var float fvgHiB = na
+    var float fvgLoS = na
+    var float fvgHiS = na
+    var int fvgBornB = na
+    var int fvgBornS = na
+    var float obLoB = na
+    var float obHiB = na
+    var float obLoS = na
+    var float obHiS = na
+    var int obBornB = na
+    var int obBornS = na
+    var float breakerLoB = na
+    var float breakerHiB = na
+    var float breakerLoS = na
+    var float breakerHiS = na
+    var int breakerBornB = na
+    var int breakerBornS = na
+    if c < obLoB - 0.15 * a
+        breakerLoS := obLoB
+        breakerHiS := obHiB
+        breakerBornS := bar_index
+        obLoB := na
+    if c > obHiS + 0.15 * a
+        breakerLoB := obLoS
+        breakerHiB := obHiS
+        breakerBornB := bar_index
+        obHiS := na
+    // A wick can mitigate the gap and reclaim it on this close. Invalidate on
+    // a close through the far edge, so valid first-touch reclaims are retained.
+    if c < fvgLoB - 0.05 * a or bar_index - fvgBornB > smcLife
+        fvgLoB := na
+    if c > fvgHiS + 0.05 * a or bar_index - fvgBornS > smcLife
+        fvgHiS := na
+    if bar_index - obBornB > smcLife
+        obLoB := na
+    if bar_index - obBornS > smcLife
+        obHiS := na
+    bool fvgB = not na(fvgLoB) and l <= fvgHiB and h >= fvgLoB and c > fvgHiB and bar_index > fvgBornB
+    bool fvgS = not na(fvgHiS) and h >= fvgLoS and l <= fvgHiS and c < fvgLoS and bar_index > fvgBornS
+    bool obB = not na(obLoB) and l <= obHiB + 0.1 * a and h >= obLoB and c > obHiB and bar_index > obBornB
+    bool obS = not na(obHiS) and h >= obLoS - 0.1 * a and l <= obHiS and c < obLoS and bar_index > obBornS
+    bool breakerB = bar_index > breakerBornB and bar_index - breakerBornB <= smcLife and l <= breakerHiB and c > breakerHiB and l > breakerLoB - 0.3 * a
+    bool breakerS = bar_index > breakerBornS and bar_index - breakerBornS <= smcLife and h >= breakerLoS and c < breakerLoS and h < breakerHiS + 0.3 * a
+    float touchedOBLowX = obLoB
+    float touchedOBHighX = obHiS
+    float touchedFVGEdgeB = fvgLoB
+    float touchedFVGEdgeS = fvgHiS
+    bool displacementB = cleanB and bd >= 0.70 * a and bd / cr >= 0.65
+    bool displacementS = cleanS and bd >= 0.70 * a and bd / cr >= 0.65
+    if l > high[3] + 0.08 * a and close[2] > open[2] and math.abs(close[2] - open[2]) >= 0.6 * a
+        fvgLoB := high[3]
+        fvgHiB := l
+        fvgBornB := bar_index
+    if h < low[3] - 0.08 * a and close[2] < open[2] and math.abs(close[2] - open[2]) >= 0.6 * a
+        fvgLoS := h
+        fvgHiS := low[3]
+        fvgBornS := bar_index
+    if displacementB and c > p6h
+        for kX = 2 to 6
+            if close[kX] < open[kX]
+                obLoB := low[kX]
+                obHiB := high[kX]
+                obBornB := bar_index
+                break
+    if displacementS and c < p6l
+        for kX = 2 to 6
+            if close[kX] > open[kX]
+                obLoS := low[kX]
+                obHiS := high[kX]
+                obBornS := bar_index
+                break
+    float downLineX = not na(prevHighBarX) and wallHighX < prevHighX ? wallHighX + (wallHighX - prevHighX) * (bar_index - 1 - wallHighBarX) / math.max(1, wallHighBarX - prevHighBarX) : na
+    float upLineX = not na(prevLowBarX) and wallLowX > prevLowX ? wallLowX + (wallLowX - prevLowX) * (bar_index - 1 - wallLowBarX) / math.max(1, wallLowBarX - prevLowBarX) : na
+    bool lineBreakB = not na(downLineX[1]) and c > downLineX + 0.1 * a and close[2] <= downLineX[1] and cleanB and c > p4h
+    bool lineBreakS = not na(upLineX[1]) and c < upLineX - 0.1 * a and close[2] >= upLineX[1] and cleanS and c < p4l
+    bool emaTouchB = l <= e20 + 0.2 * a and c > e20 and l >= e50 - 0.5 * a
+    bool emaTouchS = h >= e20 - 0.2 * a and c < e20 and h <= e50 + 0.5 * a
+    bool demandB = obB or fvgB or breakerB or zoneReactionX == 1 or math.abs(l - wallLowX) <= 0.3 * a
+    bool supplyS = obS or fvgS or breakerS or zoneReactionX == -1 or math.abs(h - wallHighX) <= 0.3 * a
+    // 1. Macro EMA200 & Strong RBS/SBR Cushion Guard (prevents shorting into rising EMA200/Support at 4096 or buying into falling EMA200/Resistance).
+    bool macroBullCushionX = c > e200 and e200 >= nz(e200s[5], e200) and ((c - e200) <= 2.4 * a or (not na(zoneSupportX) and (c - zoneSupportX) <= 0.90 * a))
+    bool macroBearCeilingX = c < e200 and e200 <= nz(e200s[5], e200) and ((e200 - c) <= 2.4 * a or (not na(zoneResistanceX) and (zoneResistanceX - c) <= 0.90 * a))
+    // 2. Waterfall / Climax Knife Guard (prevents buying the first dead-cat bounce at 4135 right after a violent rejection dump from 4148).
+    bool recentClimaxDumpX = (p6h - c) >= 1.55 * a and (open[2] - close[2] >= 0.65 * a or h - c >= 0.55 * cr or high[2] - close[2] >= 0.60 * a) and c < e10
+    bool recentClimaxPumpX = (c - p6l) >= 1.55 * a and (close[2] - open[2] >= 0.65 * a or c - l >= 0.55 * cr or close[2] - low[2] >= 0.60 * a) and c > e10
+    bool fastReclaimUpX = c > e20 and c > e10 and e10 > e10s[2] and close[2] > open[2] and c > high[2] and rs >= 52 and not macroBearCeilingX
+    bool fastReclaimDnX = c < e20 and c < e10 and e10 < e10s[2] and close[2] < open[2] and c < low[2] and rs <= 48 and not macroBullCushionX
+    bool opposingSurgeUpX = (c > e10 and e10 > e10s[2] and (c - open[2]) > 0.80 * a and rs > nz(rs3X, 50) + 5) or recentClimaxPumpX
+    bool opposingSurgeDnX = (c < e10 and e10 < e10s[2] and (open[2] - c) > 0.80 * a and rs < nz(rs3X, 50) - 5) or recentClimaxDumpX
+    bool localB = ((e20 >= e20s[3] and c > e20 and (e20 >= e50 - 0.15 * a or c > e200) and (dp0[1] >= dm0[1] or ownTrendX == 1)) or (horizon >= 2 and c > e20 and c > e50 and dp0[1] > dm0[1]) or fastReclaimUpX) and not opposingSurgeDnX and not macroBearCeilingX
+    bool localS = ((e20 <= e20s[3] and c < e20 and (e20 <= e50 + 0.15 * a or c < e200) and (dm0[1] >= dp0[1] or ownTrendX == -1)) or (horizon >= 2 and c < e20 and c < e50 and dm0[1] > dp0[1]) or fastReclaimDnX) and not opposingSurgeUpX and not macroBullCushionX
+    // Enter early in the wave near EMA10/EMA20! If a candle is already stretched (> 0.65 ATR from EMA10 or range > 1.25 ATR), arm a 1-4 bar pullback/inside-pause entry so we get a better price and hit TP easily!
+    bool overextendedBarB = cr > 1.25 * a or fastStretchB > (horizon == 1 ? 0.68 : 0.85)
+    bool overextendedBarS = cr > 1.25 * a or fastStretchS > (horizon == 1 ? 0.68 : 0.85)
+    var int armedPullBarB = -1000
+    var float armedPullLoB = na
+    var int armedPullBarS = -1000
+    var float armedPullHiS = na
+    if localB and cleanB and bd >= 0.42 * a and (overextendedBarB or c > p4h)
+        armedPullBarB := bar_index
+        armedPullLoB := math.max(l, (o + c) * 0.5 - 0.20 * a)
+    if localS and cleanS and bd >= 0.42 * a and (overextendedBarS or c < p4l)
+        armedPullBarS := bar_index
+        armedPullHiS := math.min(h, (o + c) * 0.5 + 0.20 * a)
+    // Trigger on the pullback/pause bar near EMA10 (either a compact bullish/bearish continuation candle OR a rejection wick off EMA10) so entry is close to EMA10 and TP is hit fast!
+    bool postImpulsePullB = bar_index > armedPullBarB and bar_index - armedPullBarB <= 4 and l >= armedPullLoB - 0.25 * a and l <= e10 + 0.28 * a and c > e10 and (cleanB or (c > o and lowerW >= 0.28 * cr)) and not overextendedBarB and not opposingSurgeDnX
+    bool postImpulsePullS = bar_index > armedPullBarS and bar_index - armedPullBarS <= 4 and h <= armedPullHiS + 0.25 * a and h >= e10 - 0.28 * a and c < e10 and (cleanS or (c < o and upperW >= 0.28 * cr)) and not overextendedBarS and not opposingSurgeUpX
+    bool fullBullStackX = c > e20 and e20 > e50 and e50 > e200 and e20 >= e20s[3]
+    bool fullBearStackX = c < e20 and e20 < e50 and e50 < e200 and e20 <= e20s[3]
+    bool exhaustedB = (rs > 68 and pos > 0.82 and (c - e20) > 1.35 * a) or (pos > 0.84 and slowStretchB > 1.75) or overextendedBarB or (pos > 0.80 and not na(zoneResistanceX) and (zoneResistanceX - c) <= 0.75 * a)
+    bool exhaustedS = (rs < 32 and pos < 0.18 and (e20 - c) > 1.35 * a) or (pos < 0.16 and slowStretchS > 1.75) or overextendedBarS or (pos < 0.20 and not na(zoneSupportX) and (c - zoneSupportX) <= 0.75 * a)
+    bool locationB = emaTouchB or goldenB or deepB or demandB or postImpulsePullB or (horizon >= 2 and l <= e10 + 0.25 * a and c > e10)
+    bool locationS = emaTouchS or goldenS or deepS or supplyS or postImpulsePullS or (horizon >= 2 and h >= e10 - 0.25 * a and c < e10)
+    // Require prior bar to not be a massive opposing marubozu unless fully engulfed.
+    bool controlledPullB = close[2] >= open[2] - 0.75 * a or engulfB
+    bool controlledPullS = close[2] <= open[2] + 0.75 * a or engulfS
+    bool rejectB = cleanB and controlledPullB and (patternB or (lowerW >= 0.25 * cr and c > close[2]) or c > high[2] or postImpulsePullB)
+    bool rejectS = cleanS and controlledPullS and (patternS or (upperW >= 0.25 * cr and c < close[2]) or c < low[2] or postImpulsePullS)
+    bool rangeB = rangeRegimeX and brSideX == 0 and cr <= 1.45 * a and l <= rangeLoX + 0.28 * a and c > rangeLoX and c > high[2] and rejectB and not opposingSurgeDnX and not macroBearCeilingX
+    bool rangeS = rangeRegimeX and brSideX == 0 and cr <= 1.45 * a and h >= rangeHiX - 0.28 * a and c < rangeHiX and c < low[2] and rejectS and not opposingSurgeUpX and not macroBullCushionX
+    bool trendB = useZoneMarket and localB and not exhaustedB and locationB and rejectB
+    bool trendS = useZoneMarket and localS and not exhaustedS and locationS and rejectS
+    // Strict Sweep filter: never buy sweeps at rally tops or against fullBearStackX, and never sell sweeps into rising EMA200/Support or fullBullStackX unless RSI is extreme at a verified zone.
+    bool strongImpulseAgainstB = (ownTrendX == -1 and (c < e10 or ax >= 24 or opposingSurgeDnX)) or macroBearCeilingX or (fullBearStackX and (rs > 32 or zoneReactionX != 1))
+    bool strongImpulseAgainstS = (ownTrendX == 1 and (c > e10 or ax >= 24 or opposingSurgeUpX)) or macroBullCushionX or (fullBullStackX and (rs < 68 or zoneReactionX != -1))
+    bool sweepBuyX = methodSweep and useReversal and mssB and rejectB and not exhaustedB and not strongImpulseAgainstB and (localB or (majorLiqBX and c > e20))
+    bool sweepSellX = methodSweep and useReversal and mssS and rejectS and not exhaustedS and not strongImpulseAgainstS and (localS or (majorLiqSX and c < e20))
+    bool candleB = methodCandles and (engulfB or morningX or piercingX or hammerX or soldiersX) and (demandB or locationB) and rejectB and not exhaustedB and (localB or (mssB and majorLiqBX and c > e20))
+    bool candleS = methodCandles and (engulfS or eveningX or cloudX or starX or crowsX) and (supplyS or locationS) and rejectS and not exhaustedS and (localS or (mssS and majorLiqSX and c < e20))
+    // Fast pullback and two-candle continuation require aligned EMA10/20/50 + reclaim of prior candle high/low.
+    bool fastTouchB = (math.min(l, low[2]) <= e10 + 0.18 * a and c > e10 and e10 >= e20 and c > high[2]) or postImpulsePullB
+    bool fastTouchS = (math.max(h, high[2]) >= e10 - 0.18 * a and c < e10 and e10 <= e20 and c < low[2]) or postImpulsePullS
+    bool fastB = fastPullback and localB and not exhaustedB and fastTouchB and rejectB and (close[2] < open[2] or lowerW >= 0.24 * cr or postImpulsePullB)
+    bool fastS = fastPullback and localS and not exhaustedS and fastTouchS and rejectS and (close[2] > open[2] or upperW >= 0.24 * cr or postImpulsePullS)
+    bool twoB = methodTwoCandle and localB and not exhaustedB and ((close[2] < open[2] and c > high[2] and c > open[2]) or postImpulsePullB) and rejectB and (fastTouchB or locationB)
+    bool twoS = methodTwoCandle and localS and not exhaustedS and ((close[2] > open[2] and c < low[2] and c < open[2]) or postImpulsePullS) and rejectS and (fastTouchS or locationS)
+    bool momentumEnabledX = methodMomentum and (tfSecX <= 3600 or momentumHTF or horizon >= 2)
+    bool impulseB = cleanB and bd >= 0.38 * a and bd <= 1.30 * a and bd / cr >= 0.60 and dp0[1] > dm0[1] * 1.05 and effX >= 0.24
+    bool impulseS = cleanS and bd >= 0.38 * a and bd <= 1.30 * a and bd / cr >= 0.60 and dm0[1] > dp0[1] * 1.05 and effX >= 0.24
+    bool momentumBX = momentumEnabledX and localB and not exhaustedB and volumeOKX and ((impulseB and c > momentumHighX and (not scalpMomentumConfirm or horizon >= 2 or scalpBaseX or low[2] <= e10s[2] + 0.20 * a)) or postImpulsePullB) and fastStretchB <= (horizon == 1 ? scalpMomentumMaxStretch : momentumFastATR)
+    bool momentumSX = momentumEnabledX and localS and not exhaustedS and volumeOKX and ((impulseS and c < momentumLowX and (not scalpMomentumConfirm or horizon >= 2 or scalpBaseX or high[2] >= e10s[2] - 0.20 * a)) or postImpulsePullS) and fastStretchS <= (horizon == 1 ? scalpMomentumMaxStretch : momentumFastATR)
+    // Store a CLOSED six-bar break, then wait for a later close to retest it (enabled across Scalp & Intraday M5-H4).
+    var float microLevelB = na
+    var float microLevelS = na
+    var int microBornB = na
+    var int microBornS = na
+    if c < microLevelB - 0.35 * a or bar_index - microBornB > microRetestBars
+        microLevelB := na
+    if c > microLevelS + 0.35 * a or bar_index - microBornS > microRetestBars
+        microLevelS := na
+    bool microB = microRetest and methodRetest and horizon <= 2 and bar_index > microBornB and l <= microLevelB + 0.18 * a and c > microLevelB + 0.05 * a and c > high[2] and localB and not exhaustedB and rejectB
+    bool microS = microRetest and methodRetest and horizon <= 2 and bar_index > microBornS and h >= microLevelS - 0.18 * a and c < microLevelS - 0.05 * a and c < low[2] and localS and not exhaustedS and rejectS
+    // Preserve the tested levels before a new break can update the pending one.
+    float testedMicroB = microLevelB
+    float testedMicroS = microLevelS
+    if c > p6h + 0.08 * a and close[2] <= p6h and impulseB
+        microLevelB := p6h
+        microBornB := bar_index
+    if c < p6l - 0.08 * a and close[2] >= p6l and impulseS
+        microLevelS := p6l
+        microBornS := bar_index
+    bool hlB = methodStructure and localB and not exhaustedB and wallLowX > prevLowX and rejectB and l <= wallLowX + 0.45 * a and c > high[2]
+    bool lhS = methodStructure and localS and not exhaustedS and wallHighX < prevHighX and rejectS and h >= wallHighX - 0.45 * a and c < low[2]
+    // Upgraded VWAP Method: requires VWAP slope alignment, EMA10/20/200 trend agreement, and 2-bar hold (prevents catching knives across VWAP at 4135 or shorting rallies at 4110).
+    bool vwapValidX = timeframe.isintraday and not na(vwapSeriesX[1]) and not na(vwapSeriesX[4])
+    bool vwapBuyX = methodVWAP and vwapValidX and localB and not exhaustedB and rejectB and c > e200 and c > e10 and vwapSeriesX[1] >= vwapSeriesX[4] and l <= vwapSeriesX[1] + 0.12 * a and c > vwapSeriesX[1] + 0.05 * a and low[2] >= vwapSeriesX[2] - 0.25 * a and c > high[2]
+    bool vwapSellX = methodVWAP and vwapValidX and localS and not exhaustedS and rejectS and c < e200 and c < e10 and vwapSeriesX[1] <= vwapSeriesX[4] and h >= vwapSeriesX[1] - 0.12 * a and c < vwapSeriesX[1] - 0.05 * a and high[2] <= vwapSeriesX[2] + 0.25 * a and c < low[2]
+    array<bool> buyMethodsX = array.from(trendB, methodEMAReject and ((localB and not exhaustedB and emaTouchB and c > high[2] and rejectB) or fastB), breakBX, candleB, sweepBuyX, momentumBX, twoB, retestB or microB, hlB, methodRange and rangeB, methodTrendline and lineBreakB and localB and not exhaustedB, vwapBuyX)
+    array<bool> sellMethodsX = array.from(trendS, methodEMAReject and ((localS and not exhaustedS and emaTouchS and c < low[2] and rejectS) or fastS), breakSX, candleS, sweepSellX, momentumSX, twoS, retestS or microS, lhS, methodRange and rangeS, methodTrendline and lineBreakS and localS and not exhaustedS, vwapSellX)
+    [birthParent1X, birthParent2X, birthMacroX, birthMacroCountX] = f_native_context(srcTime, horizon)
+    float bestRankX = -1.0
+    float secondRankX = -1.0
+    int secondSideX = 0
+    // Objective Causal Market Regime Classification on closed native bar: 1 = TREND, 2 = RANGE, 3 = TRANSITION
+    bool cleanBullTrendRegimeX = c > e20 and e20 > e50 and e50 >= nz(e50s[4], e50) - 0.05 * a
+    bool cleanBearTrendRegimeX = c < e20 and e20 < e50 and e50 <= nz(e50s[4], e50) + 0.05 * a
+    bool cleanRangeRegimeX = not cleanBullTrendRegimeX and not cleanBearTrendRegimeX and math.abs(e20 - e50) < 0.55 * a and ax < 22
+    int currentRegimeX = (cleanBullTrendRegimeX or cleanBearTrendRegimeX) ? 1 : cleanRangeRegimeX ? 2 : 3
+    // v2.0.0 Validated 3-Core Regime Router (1: Breakout Continuation, 2: Trend EMA20 Pullback, 3: With-Trend Sweep Reclaim)
+    bool v2BreakoutContB = c > e20 and c > o and l > e20 + 0.20 * a and c > p6h and bd >= 0.40 * a and not macroBearCeilingX
+    bool v2BreakoutContS = c < e20 and c < o and h < e20 - 0.20 * a and c < p6l and bd >= 0.40 * a and not macroBullCushionX
+    bool v2TrendPullbackB = cleanBullTrendRegimeX and c > o and bd >= 0.16 * a and l <= e20 + 0.25 * a and (mode == "Active" or (c > high[2] and dp0[1] > dm0[1])) and not macroBearCeilingX
+    bool v2TrendPullbackS = cleanBearTrendRegimeX and c < o and bd >= 0.16 * a and h >= e20 - 0.25 * a and (mode == "Active" or (c < low[2] and dm0[1] > dp0[1])) and not macroBullCushionX
+    bool v2SweepReclaimB = cleanBullTrendRegimeX and l < p4l and c > p4l and c > high[2] and c > o and lowerW >= 0.25 * cr and not macroBearCeilingX
+    bool v2SweepReclaimS = cleanBearTrendRegimeX and h > p4h and c < p4h and c < low[2] and c < o and upperW >= 0.25 * cr and not macroBullCushionX
+    for directionX = 0 to 1
+        int sideX = directionX == 0 ? 1 : -1
+        for methodIndexX = 0 to 11
+            int methodX = methodIndexX + 1
+            bool rawFiresX = directionX == 0 ? array.get(buyMethodsX, methodIndexX) : array.get(sellMethodsX, methodIndexX)
+            bool v2FiresX = directionX == 0 ? (methodX == 6 ? v2BreakoutContB : methodX == 1 ? v2TrendPullbackB : methodX == 5 ? v2SweepReclaimB : (methodX == 3 and breakBX) or (methodX == 8 and retestB)) : (methodX == 6 ? v2BreakoutContS : methodX == 1 ? v2TrendPullbackS : methodX == 5 ? v2SweepReclaimS : (methodX == 3 and breakSX) or (methodX == 8 and retestS))
+            bool firesX = regimeRouterOnly ? v2FiresX : rawFiresX
+            if firesX and safeX and not newsX and not (sessionFilter and horizon == 1 and rollX)
+                bool alignedX = sideX == 1 ? localB : localS
+                bool reversalX = sideX == 1 ? mssB : mssS
+                bool rangeX = methodX == 10
+                bool goldenX = sideX == 1 ? goldenB or deepB : goldenS or deepS
+                bool smcX = sideX == 1 ? demandB : supplyS
+                bool sweptX = sideX == 1 ? recentSweepB : recentSweepS
+                bool candleX = sideX == 1 ? patternB : patternS
+                bool counterX = ownTrendX == -sideX
+                bool htfAlignedX = birthParent1X == sideX or birthParent2X == sideX
+                bool htfBothAgainstX = birthParent1X == -sideX and birthParent2X == -sideX
+                bool sessionBonusX = tfSecX >= 3600 or londonX or newYorkX or rangeX
+                float qualityX = math.min(100.0, 42 + (alignedX or rangeX ? 10 : 0) + (reversalX or methodX == 3 or methodX == 8 or methodX == 11 ? 12 : 0) + (goldenX ? 8 : 0) + (smcX ? 8 : 0) + (sweptX ? 8 : 0) + (candleX ? 8 : 0) + (volumeOKX and bd >= 0.25 * a ? 6 : 0) + (sessionBonusX ? 4 : 0) + (volRatioX >= 0.55 and volRatioX <= 1.75 ? 6 : 0) + (htfAlignedX ? 4 : 0) - (htfBothAgainstX and totalLossStreakX >= 1 ? 8 : 0))
+                // Require higher setup quality only when recovering from consecutive stop-losses (streak >= 2).
+                float streakPenaltyReqX = totalLossStreakX >= 2 ? 5.0 : 0.0
+                float baseReqX = horizon >= 2 ? (methodX == 5 or methodX == 10 ? 60.0 : 55.0) : (methodX == 5 or methodX == 10 or methodX == 11 ? 62.0 : methodX == 6 ? 60.0 : 57.0)
+                float requiredX = baseReqX + (mode == "Strict" ? 10 : mode == "Balanced" ? 4 : 0) + (volRatioX > 1.70 ? 4 : 0) + streakPenaltyReqX
+                bool counterOKX = not counterX or (useReversal and reversalX and (smcX or candleX) and qualityX >= (horizon >= 2 ? 66 : 70)) or (rangeX and not trendRegimeX)
+                float anchorX = sideX == 1 ? math.min(l, low[2]) : math.max(h, high[2])
+                if methodX == 5
+                    anchorX := sideX == 1 ? math.min(anchorX, sweptLow) : math.max(anchorX, sweptHigh)
+                else if methodX == 3 or methodX == 8
+                    bool zoneRetestX = sideX == 1 ? retestB : retestS
+                    float breakStopX = methodX == 8 and not zoneRetestX ? (sideX == 1 ? testedMicroB : testedMicroS) : breakAnchorX
+                    anchorX := sideX == 1 ? math.min(anchorX, breakStopX) : math.max(anchorX, breakStopX)
+                else if rangeX
+                    anchorX := sideX == 1 ? math.min(anchorX, rangeLoX) : math.max(anchorX, rangeHiX)
+                else if methodX == 6
+                    anchorX := sideX == 1 ? math.min(anchorX, scalpBaseLoX) : math.max(anchorX, scalpBaseHiX)
+                if sideX == 1 and obB
+                    anchorX := math.min(anchorX, touchedOBLowX)
+                if sideX == -1 and obS
+                    anchorX := math.max(anchorX, touchedOBHighX)
+                // Protect the far edge of the actual reclaimed structure, including
+                // the full pullback, rather than only the signal candle's wick.
+                if scalpStructureSL and horizon == 1
+                    float pullEdgeX = sideX == 1 ? p4l : p4h
+                    if sideX * (anchorX - pullEdgeX) >= 0 and math.abs(anchorX - pullEdgeX) <= srClusterATR * a
+                        anchorX := pullEdgeX
+                    float defendedEdgeX = sideX == 1 ? (fvgB ? touchedFVGEdgeB : breakerB ? breakerLoB : zoneReactionX == 1 ? zoneSupportLoX : na) : (fvgS ? touchedFVGEdgeS : breakerS ? breakerHiS : zoneReactionX == -1 ? zoneResistanceHiX : na)
+                    if not na(defendedEdgeX) and sideX * (anchorX - defendedEdgeX) >= 0 and math.abs(anchorX - defendedEdgeX) <= srClusterATR * a
+                        anchorX := defendedEdgeX
+                float swingX = sideX == 1 ? wallLowX : wallHighX
+                if not na(swingX) and sideX * (anchorX - swingX) >= 0 and math.abs(anchorX - swingX) <= 0.75 * a
+                    anchorX := swingX
+                // Only use strong verified opposing zones as wallX for trend-aligned setups; use swing/range walls for range/counter-trend setups.
+                float wallX = alignedX ? (sideX == 1 ? zoneResistanceX : zoneSupportX) : (sideX == 1 ? f_near_above(c, wallHighX, prevHighX, rangeHiX, zoneResistanceX) : f_near_below(c, wallLowX, prevLowX, rangeLoX, zoneSupportX))
+                float stretchX = sideX == 1 ? fastStretchB : fastStretchS
+                [passX, slX, tpX, netX] = f_setup_plan(sideX, methodX, qualityX, c, anchorX, a, wallX, stretchX, cr, horizon)
+                int spacingX = methodX == 6 ? (horizon >= 2 ? momentumHTFSpacing : momentumSpacing) : 1
+                bool freshX = na(lastSignalTime) or srcTime - lastSignalTime >= spacingX * nativeMsX
+                int finalSideX = reverseOutput ? -sideX : sideX
+                int resetTimeX = finalSideX == 1 ? lastSetupResetB : lastSetupResetS
+                bool eventX = (methodX == 3 or methodX == 5 or methodX == 8 or methodX == 10 or methodX == 11) and totalLossStreakX < 2
+                bool rearmedX = not scalpFreshSetup or horizon != 1 or finalSideX != lastSignalSide or eventX or na(lastSignalTime) or (not na(resetTimeX) and resetTimeX > lastSignalTime)
+                bool trendOKX = not nativeTrendOnly or not counterX or ((methodX == 4 or methodX == 5 or methodX == 11) and reversalX) or (rangeX and not trendRegimeX)
+                // Noise reduces the rank instead of globally disabling every model.
+                float noisePenaltyX = not rangeX and not reversalX and ax < 18 and effX < 0.22 ? 6.0 : 0.0
+                bool learnedX = f_method_gate(array.get(methodCount, methodIndexX), array.get(methodWins, methodIndexX), array.get(methodNet, methodIndexX), array.get(methodStreak, methodIndexX), array.get(methodUntil, methodIndexX), srcTime, nativeMsX, qualityX)
+                if passX and counterOKX and trendOKX and freshX and rearmedX and learnedX and qualityX >= requiredX
+                    float rankX = f_candidate_rank(qualityX, netX, array.get(methodCount, methodIndexX), array.get(methodNet, methodIndexX), array.get(methodStreak, methodIndexX)) - noisePenaltyX
+                    if rankX > bestRankX
+                        if sig != sideX
+                            secondRankX := bestRankX
+                            secondSideX := sig
+                        bestRankX := rankX
+                        sig := sideX
+                        signalQ := qualityX
+                        chosenMethod := methodX
+                        candidateAnchor := anchorX
+                        candidateSL := slX
+                        candidateTP := tpX
+                    else if sideX != sig and rankX > secondRankX
+                        secondRankX := rankX
+                        secondSideX := sideX
+    if secondSideX == -sig and bestRankX - secondRankX < 6
+        sig := 0
+    if sig != 0
+        string locationNoteX = (sig == 1 ? goldenB or deepB : goldenS or deepS) ? " + Fibonacci" : (sig == 1 ? obB : obS) ? " + OB" : (sig == 1 ? fvgB : fvgS) ? " + FVG" : (sig == 1 ? breakerB : breakerS) ? " + Breaker" : ""
+        string sweepNoteX = (sig == 1 ? inducementB : inducementS) ? " + Inducement proxy" : (sig == 1 ? mssB : mssS) ? " + Sweep/MSS" : ""
+        sweepNoteX += (sig == 1 ? eqLowX and mssB : eqHighX and mssS) ? " EQ" : ""
+        string structNoteX = (sig == 1 ? c > wallHighX and close[2] <= wallHighX : c < wallLowX and close[2] >= wallLowX) ? (ownTrendX == -sig ? " + CHoCH" : " + BOS") : ""
+        if sig == 1
+            patternsB := f_setup_name(chosenMethod) + locationNoteX + sweepNoteX + structNoteX + (engulfB ? " + Engulf" : "")
+        else
+            patternsS := f_setup_name(chosenMethod) + locationNoteX + sweepNoteX + structNoteX + (engulfS ? " + Engulf" : "")
+
+    float pressureBiasX = (dp0[1] - dm0[1]) / math.max(dp0[1] + dm0[1], 0.001)
+    float structureBiasX = (not na(prevLowX) ? math.sign(wallLowX - prevLowX) * 0.5 : 0.0) + (not na(prevHighX) ? math.sign(wallHighX - prevHighX) * 0.5 : 0.0)
+    float slopeBiasX = f_clamp((e20 - e20s[6]) / math.max(a, syminfo.mintick), -1, 1)
+    float exhaustionX = rs > 70 ? -0.6 : rs < 30 ? 0.6 : 0.0
+    float upRoomX = not na(zoneResistanceX) ? math.min(4.0, (zoneResistanceX - c) / a) : 0.0
+    float downRoomX = not na(zoneSupportX) ? math.min(4.0, (c - zoneSupportX) / a) : 0.0
+    float roomBiasX = upRoomX > 0 and downRoomX > 0 ? (upRoomX - downRoomX) / math.max(upRoomX + downRoomX, 0.01) : 0.0
+    float evidenceX = brSideX != 0 ? brSideX : rtSideX != 0 ? rtSideX : zoneReactionX != 0 ? zoneReactionX : patternsB != "" and patternsS == "" ? 0.5 : patternsS != "" and patternsB == "" ? -0.5 : 0.0
+    float rawForecastX = f_native_probability(slopeBiasX, pressureBiasX, exhaustionX, structureBiasX, evidenceX, roomBiasX, ax < 18 or effX < 0.24)
+    float smoothForecastX = ta.ema(rawForecastX, 3)
+    var float heldForecastX = na
+    var int forecastAtX = 0
+    var int forecastOppositeX = 0
+    bool probabilityReadyX = not na(e50) and not na(a) and a > 0 and not na(rs) and not na(effX)
+    if probabilityReadyX
+        bool oppositeX = not na(heldForecastX) and (heldForecastX >= 55 and smoothForecastX <= 45 or heldForecastX <= 45 and smoothForecastX >= 55)
+        forecastOppositeX := oppositeX ? forecastOppositeX + 1 : 0
+        if na(heldForecastX) or srcTime - forecastAtX >= forecastBars * nativeMsX or forecastOppositeX >= 2 or brSideX != 0 or rtSideX != 0
+            heldForecastX := math.round(smoothForecastX)
+            forecastAtX := srcTime
+            forecastOppositeX := 0
+    float biasUp = probabilityReadyX ? heldForecastX : na
+
+    // Verdict and note are immutable birth snapshots, transported with both
+    // the live state and its eventual resolution. Host replay cannot re-filter them.
+    var float liveContext = na
+    var string liveWhy = ""
+    var float resContext = na
+    var string resWhy = ""
+    // Final-output closed-bar lifecycle + global/same-side cooldown after any net loss.
+    var int liveSide = 0
+    var int liveBorn = na
+    var float liveEntry = na
+    var float liveInitialSL = na
+    var float liveAnchorX = na
+    var float liveSL = na
+    var float liveTP = na
+    var float livePeakR = 0.0
+    var float liveMaxAdverseR = 0.0
+    var float liveQ = na
+    var float livePos = na
+    var float liveBreakLoX = na
+    var float liveBreakHiX = na
+    var string liveNote = ""
+    var string resNote = ""
+    var int liveMethod = 0
+    var int resMethod = 0
+    var int liveStopMovedAt = 0
+    var int liveRegime = 0
+    var int resRegime = 0
+    var int resBorn = na
+    var int resTime = na
+    var int resCode = 0
+    var int resSide = 0
+    var float resE = na
+    var float resSL = na
+    var float resTP = na
+    var float resQ = na
+    var float resPos = na
+    var float resPrice = na
+    bool justResolved = false
+    int outputSignalX = reverseOutput ? -sig : sig
+
+    // Check both the newly closed bar [1] (when srcTime > liveBorn) AND the developing bar [0] (when time_close > liveBorn and time >= liveBorn) for immediate TP/SL touch!
+    bool checkClosedBarX = not na(srcTime) and liveSide != 0 and srcTime > liveBorn
+    if checkClosedBarX
+        bool slHit = liveSide == 1 ? l <= liveSL : h >= liveSL
+        bool tpHit = liveSide == 1 ? h >= liveTP : l <= liveTP
+        float originalRiskX = math.max(math.abs(liveEntry - liveInitialSL), syminfo.mintick)
+        float closeRX = liveSide * (c - liveEntry) / originalRiskX
+        float barBestRX = liveSide == 1 ? (h - liveEntry) / originalRiskX : (liveEntry - l) / originalRiskX
+        float barWorstRX = liveSide == 1 ? (liveEntry - l) / originalRiskX : (h - liveEntry) / originalRiskX
+        if closeRX >= 0.35
+            livePeakR := math.max(livePeakR, math.max(closeRX, barBestRX * 0.85))
+        else
+            livePeakR := math.max(livePeakR, closeRX)
+        liveMaxAdverseR := math.max(liveMaxAdverseR, math.max(0.0, barWorstRX))
+        int ageMsX = srcTime - liveBorn
+        int baseLifeMsX = f_mtf_life_ms(horizon)
+        float adverseCloseRX = math.max(0.0, -closeRX)
+        float cutThresholdRX = math.max(smartCutMinR, horizon == 1 ? scalpDefenseR : horizon == 2 ? intradayDefenseR : swingDefenseR)
+        // ===== BALANCED CONVICTION HOLD vs. SMART CUT-LOSS / EARLY STALE ENGINE =====
+        // 1. When are we confident the trade CAN STILL PROFIT ("tahan aja sampai profit")?
+        //    - Price is still holding above/below EMA20 (or EMA50 with macro EMA200 support), AND
+        //    - No opposing signal or impulsive breakdown has occurred, AND
+        //    - Drawdown on close is still moderate (< 0.45R) with buyer/seller wick defense or supportive probability.
+        float ownProbX = liveSide == 1 ? nz(biasUp, 50.0) : 100.0 - nz(biasUp, 50.0)
+        bool ema20HoldingX = liveSide * (c - e20) >= -0.05 * a
+        bool ema50AndMacroHoldingX = liveSide * (c - e50) >= 0 and liveSide * (c - e200) > 0
+        bool candleDefendingX = liveSide == 1 ? (lowerW >= 0.28 * cr or c > o) and rs >= 44 : (upperW >= 0.28 * cr or c < o) and rs <= 56
+        bool canStillProfitX = (ema20HoldingX or ema50AndMacroHoldingX) and ownProbX >= 45.0 and candleDefendingX and adverseCloseRX < 0.50 and sig != -liveSide
+        // 2. When are we confident the trade WILL LOSE BIG ("yakin bakal rugi banyak -> exit cut loss atau stale sebelum kena SL")?
+        bool wrongSideEma10And20X = liveSide * (c - e10) < -0.04 * a and liveSide * (c - e20) < -0.04 * a
+        bool twoBarsWrongEma20X = ageMsX >= 2 * nativeMsX and liveSide * (c - e20) < 0 and liveSide * (close[2] - e20s[2]) < 0
+        bool e10SlopingAgainstX = liveSide * (e10 - e10s[2]) < 0
+        bool dmiAgainstX = liveSide == 1 ? dm0[1] > dp0[1] * 1.05 : dp0[1] > dm0[1] * 1.05
+        bool opposingImpulseBarX = -liveSide * (c - o) >= 0.35 * a and (liveSide == 1 ? c < low[2] : c > high[2])
+        bool opposingSignalFiredX = sig == -liveSide and signalQ >= 58.0
+        bool againstMacroEma200X = liveSide * (c - e200) < -0.10 * a
+        bool invalidNowX = liveSide * (c - liveAnchorX) < -0.05 * a
+        bool invalidPriorX = liveSide * (close[2] - liveAnchorX) < -0.05 * a
+        // [A] Structure Flip Defense (Blue EXIT STRUCTURE): anchor breached or 2 bars wrong side of EMA20 with DMI + EMA10 turned against us.
+        bool flipped = mtfBreakoutDefense and not canStillProfitX and ageMsX >= 2 * nativeMsX and adverseCloseRX >= cutThresholdRX and ((invalidNowX and wrongSideEma10And20X) or (twoBarsWrongEma20X and e10SlopingAgainstX and dmiAgainstX))
+        // [B] Smart Cut-Loss (Blue EXIT CUT LOSS): in drawdown >= smartCutMinR (0.32R) on wrong side of EMA10/20 with opposing impulse, opposing signal, or counter-EMA200 failure.
+        bool impulseBreakdownCutX = smartCutLoss and not canStillProfitX and adverseCloseRX >= smartCutMinR and wrongSideEma10And20X and (opposingImpulseBarX or opposingSignalFiredX or (againstMacroEma200X and e10SlopingAgainstX) or (adverseCloseRX >= 0.52 and e10SlopingAgainstX))
+        bool smartCutNowX = impulseBreakdownCutX
+        // [C] Early Stale Exit (Blue EXIT STALE): trade is stagnating in loss (open >= 30% of life or >= 4 bars, never reached +0.35R, and sitting on wrong side of EMA20 in drawdown >= 0.18R) -> exit as STALE instead of waiting to get hit by SL!
+        bool earlyLossStaleX = smartCutLoss and not canStillProfitX and (ageMsX >= int(baseLifeMsX * 0.30) or ageMsX >= 4 * nativeMsX) and livePeakR < 0.35 and adverseCloseRX >= 0.18 and twoBarsWrongEma20X
+        bool failedBreakX = not reverseOutput and not canStillProfitX and f_failed_break(liveMethod, liveSide, ageMsX, nativeMsX, liveBreakLoX, liveBreakHiX, c, a) and wrongSideEma10And20X
+        bool runnerAlignedX = closeRX >= 0.25 and (liveSide == 1 ? c > e20 : c < e20)
+        // Extend life up to 1.35x if the trade is profitable and trending; or trigger early STALE if stagnating in loss!
+        bool stale = earlyLossStaleX or ageMsX >= (runnerAlignedX ? int(baseLifeMsX * 1.35) : baseLifeMsX)
+        if slHit or tpHit or failedBreakX or flipped or smartCutNowX or stale
+            // Export the resolution so the host chart can build the daily ledger.
+            // Code: 1 TP, -1 SL, 2 STRUCTURE (blue), 3 STALE, 4 FAILED BREAK (blue), 5 TRAIL/BE, 6 CUT LOSS (blue).
+            resBorn := liveBorn
+            resTime := srcTime
+            [nativeHitX, nativeFillX] = f_touch_bar(liveSide, liveSL, liveTP, o, h, l)
+            bool movedStopX = liveSide * (liveSL - liveInitialSL) > syminfo.mintick * 0.5
+            // If time expires while already protected by a profitable moved stop or > +0.50R close, classify as TRAIL/BE profit lock instead of STALE.
+            bool profitableExpiryX = stale and nativeHitX == 0 and (movedStopX or closeRX >= 0.50)
+            // Honest fill price: stop/market exits pay 1-way slippagePrice; never cap Cut-Loss price artificially!
+            float marketExitFillX = c - liveSide * slippagePrice
+            float prelimExitPxX = nativeHitX != 0 ? nativeFillX : marketExitFillX
+            float prelimNetRX = (liveSide * (prelimExitPxX - liveEntry) - costPrice) / originalRiskX
+            // Distinguish exit reason from financial outcome: a moved stop is only TRAIL/BE (5) if it improved upon initial SL; if SL was hit first, never label it as CUT LOSS!
+            resCode := nativeHitX == -1 or nativeHitX == 2 ? (movedStopX ? 5 : -1) : nativeHitX == 1 ? 1 : failedBreakX ? 4 : smartCutNowX ? 6 : flipped ? 2 : (profitableExpiryX and prelimNetRX > 0) ? 5 : 3
+            resPrice := prelimExitPxX
+            lastExitTime := srcTime
+            resSide := liveSide
+            resMethod := liveMethod
+            resRegime := liveRegime
+            resNote := liveNote
+            resContext := liveContext
+            resWhy := liveWhy
+            float methodResultR = (liveSide * (resPrice - liveEntry) - costPrice) / originalRiskX
+            f_record_method(liveMethod, methodResultR, srcTime, int(tfSecX * 1000), methodRing, methodCount, methodHead, methodWins, methodNet, methodStreak, methodUntil)
+            resE := liveEntry
+            resSL := liveInitialSL
+            resTP := liveTP
+            resQ := liveQ
+            resPos := livePos
+            // Only count full red SL hits (resCode == -1) toward heavy loss-streak circuit breakers; controlled blue early cuts allow agile re-entry!
+            if resCode == -1 and liveSide * (resPrice - liveEntry) - costPrice < -0.05 * originalRiskX
+                totalLossStreakX += 1
+                sideLossCountX := liveSide == lastSLSide ? sideLossCountX + 1 : 1
+                scalpRearmX := false
+                lastSLTime := srcTime
+                lastSLSide := liveSide
+                lastSLPrice := liveEntry
+                lastSLMethod := liveMethod
+            else if resCode == 2 or resCode == 3 or resCode == 4 or resCode == 6
+                // For a blue Smart Cut-Loss, record failed zone so we don't re-enter same side at same failed price, while allowing opposite reversal!
+                lastSLTime := srcTime
+                lastSLSide := liveSide
+                lastSLPrice := liveEntry
+                lastSLMethod := liveMethod
+            else if liveSide * (resPrice - liveEntry) - costPrice > 0.05 * originalRiskX
+                totalLossStreakX := 0
+                sideLossCountX := 0
+                scalpRearmX := true
+            liveSide := 0
+            liveBorn := na
+            liveEntry := na
+            liveSL := na
+            liveTP := na
+            livePeakR := 0.0
+            liveMaxAdverseR := 0.0
+            liveQ := na
+            livePos := na
+            justResolved := true
+
+        else
+            // Evaluate OLD stop first; these new levels apply only to subsequent bars.
+            // Let winning trades breathe so they hit WIN TP! Only lock BE when price has already come close to TP (>= beAtR = 0.82R or >= 0.88R intrabar) AND momentum stalls/pauses!
+            bool momentumStallingInProfitX = -liveSide * (c - o) > 0 or liveSide * (c - e10) < 0 or ageMsX >= int(baseLifeMsX * 0.55)
+            bool nearTpTouchLockX = barBestRX >= 0.88 and closeRX >= 0.35
+            bool recoveredDeepDrawdownX = liveMaxAdverseR >= 0.45 and closeRX >= 0.65 and momentumStallingInProfitX
+            if manageBE and (nearTpTouchLockX or recoveredDeepDrawdownX or ((closeRX >= beAtR or livePeakR >= beAtR) and closeRX >= 0.40 and momentumStallingInProfitX))
+                float lockOffsetX = costPrice + beLockR * originalRiskX
+                float beX = liveEntry + liveSide * lockOffsetX
+                // Keep at least 0.35 ATR breathing room behind current close so normal wicks don't stop out the trade before TP!
+                float maxSafeBeX = c - liveSide * 0.35 * a
+                beX := liveSide == 1 ? math.min(beX, maxSafeBeX) : math.max(beX, maxSafeBeX)
+                if liveSide * (beX - (liveEntry + liveSide * costPrice)) >= 0
+                    liveSL := liveSide == 1 ? math.max(liveSL, beX) : math.min(liveSL, beX)
+            if manageTrail and (closeRX >= trailAtR or (livePeakR >= trailAtR and closeRX >= 0.65)) and momentumStallingInProfitX
+                float structuralTrailX = liveSide == 1 ? p4l - srBufferATR * a : p4h + srBufferATR * a
+                float atrTrailX = c - liveSide * trailATR * a
+                float candidateTrailX = liveSide == 1 ? math.max(structuralTrailX, atrTrailX) : math.min(structuralTrailX, atrTrailX)
+                float safeBoundX = c - liveSide * 0.40 * a
+                candidateTrailX := liveSide == 1 ? math.min(candidateTrailX, safeBoundX) : math.max(candidateTrailX, safeBoundX)
+                if liveSide * (candidateTrailX - (liveEntry + liveSide * costPrice)) >= 0
+                    liveSL := liveSide == 1 ? math.max(liveSL, candidateTrailX) : math.min(liveSL, candidateTrailX)
+            float prevSLX = liveSL
+            liveSL := f_round(liveSL)
+            if math.abs(liveSL - prevSLX) >= syminfo.mintick * 0.5
+                liveStopMovedAt := srcTime
+
+    // Loss reset uses only a subsequent CLOSED native candle + clean pullback/base.
+    bool scalpResetTouchX = (c < o and l <= e10 + 0.15 * a) or (c > o and h >= e10 - 0.15 * a) or scalpBaseX
+    int nativeBarMs = int(timeframe.in_seconds() * 1000.0)
+    int streakWaitBars = horizon == 1 ? streakPauseBars : math.max(1, int(math.ceil(streakPauseBars * 0.5)))
+    int anyLossWaitMs = (totalLossStreakX >= 2 ? streakWaitBars : 1) * nativeBarMs
+    if not scalpRearmX and not na(lastSLTime) and srcTime > lastSLTime and (scalpResetTouchX or srcTime - lastSLTime >= f_mtf_life_ms(1))
+        scalpRearmX := true
+    outputSignalX := reverseOutput ? -sig : sig
+    // After 1 SL: wait at least 1 bar for opposite side, or lossSideBars for same side. After >=2 consecutive SLs: pause BOTH sides for streakWaitBars!
+    bool anyLossCooling = not na(lastSLTime) and srcTime - lastSLTime < anyLossWaitMs
+    bool scalpRetryBlockedX = scalpGuardX and not scalpRearmX and (sideLossCountX >= 2 and outputSignalX == lastSLSide or totalLossStreakX >= 2)
+    int cooldownBarsX = horizon == 1 ? lossSideBars : activeX ? 1 : horizon == 2 ? 2 : 1
+    int sameSideWaitMs = cooldownBarsX * nativeBarMs + (sideLossCountX >= 2 ? streakWaitBars * nativeBarMs : 0)
+    bool sameSideBlocked = sameSideWaitMs > 0 and not na(lastSLTime) and outputSignalX == lastSLSide and srcTime - lastSLTime < sameSideWaitMs
+    // Spatial Anti-Repeat SL Guard: do not repeat the same direction in the same price zone (or same method) within 8 bars of an SL unless price broke out >= 0.55 ATR beyond the failed entry!
+    bool recentFailedZoneX = not na(lastSLTime) and not na(lastSLPrice) and outputSignalX == lastSLSide and srcTime - lastSLTime < 8 * nativeBarMs
+    bool clearedFailedZoneX = outputSignalX == 1 ? c >= lastSLPrice + 0.55 * a or l <= e50 : c <= lastSLPrice - 0.55 * a or h >= e50
+    bool sameZoneRepeatBlockedX = recentFailedZoneX and (math.abs(c - lastSLPrice) <= 0.85 * a or chosenMethod == lastSLMethod) and not clearedFailedZoneX
+    bool exitCooling = not na(lastExitTime) and srcTime - lastExitTime < cooldown * 60000
+    // Never re-arm on the exact same bar after a stop-loss (resCode == -1); allow same-bar re-arm after TP/TRAIL/BE win.
+    bool closeRearmX = justResolved and (horizon == 1 or activeX) and cooldown == 0 and ((resCode == 1 or resCode == 5) and totalLossStreakX == 0 or (resCode == 2 or resCode == 3 or resCode == 4 or resCode == 6) and outputSignalX == -resSide)
+    bool resolutionWaitX = justResolved and not closeRearmX
+    int lastResetX = outputSignalX == 1 ? lastSetupResetB : lastSetupResetS
+    bool eventSetupX = (chosenMethod == 3 or chosenMethod == 8 or chosenMethod == 10 or chosenMethod == 11) and totalLossStreakX < 2
+    bool resetAfterEntryX = not na(lastResetX) and (na(lastSignalTime) or lastResetX > lastSignalTime)
+    bool flowSpacingX = scalpFreshSetup and horizon == 1 and outputSignalX == lastSignalSide and not eventSetupX and not na(lastSignalTime) and not resetAfterEntryX
+    bool reverseRiskOK = not reverseOutput or (math.abs(c - candidateSL) - costPrice) / math.max(math.abs(candidateTP - c) + costPrice, syminfo.mintick) >= classicMinNetRR
+    bool nativeSessionOK = not useSession or not na(time(timeframe.period, sessionHours, tz)[1])
+    if not na(srcTime) and liveSide == 0 and not resolutionWaitX and not flowSpacingX and sig != 0 and not anyLossCooling and not sameSideBlocked and not sameZoneRepeatBlockedX and not scalpRetryBlockedX and not exitCooling and nativeSessionOK and reverseRiskOK and srcTime >= startTest and not na(candidateSL) and not na(candidateTP)
+        liveSide := outputSignalX
+        liveBorn := srcTime
+        lastSignalTime := srcTime
+        lastSignalSide := outputSignalX
+        lastSignalEntry := c
+        liveEntry := c
+        liveSL := reverseOutput ? candidateTP : candidateSL
+        liveTP := reverseOutput ? candidateSL : candidateTP
+        liveInitialSL := liveSL
+        livePeakR := 0.0
+        liveMaxAdverseR := 0.0
+        liveAnchorX := reverseOutput ? liveSL + liveSide * (horizon == 1 ? scalpSLBufferATR : srBufferATR) * a : candidateAnchor
+        liveQ := signalQ
+        liveMethod := chosenMethod
+        [entryContextX, entryWhyX] = f_context_verdict(horizon, liveSide, signalQ, pos, srcTime, chosenMethod, birthParent1X, birthParent2X, birthMacroX)
+        liveContext := entryContextX
+        liveWhy := entryWhyX
+        bool microEntryX = chosenMethod == 8 and (liveSide == 1 ? microB and not retestB : microS and not retestS)
+        float microEdgeX = liveSide == 1 ? testedMicroB : testedMicroS
+        liveBreakLoX := microEntryX ? microEdgeX - 0.10 * a : chosenMethod == 3 or chosenMethod == 8 ? breakEntryLoX : na
+        liveBreakHiX := microEntryX ? microEdgeX + 0.10 * a : chosenMethod == 3 or chosenMethod == 8 ? breakEntryHiX : na
+        if chosenMethod == 5
+            if liveSide == 1
+                sweptAtB := na
+            else
+                sweptAtS := na
+        if liveSide == 1
+            armedPullBarB := -1000
+        else
+            armedPullBarS := -1000
+        if microEntryX
+            if liveSide == 1
+                microLevelB := na
+            else
+                microLevelS := na
+        string relevantPatterns = liveSide == 1 ? patternsB : patternsS
+        string contraryPatterns = liveSide == 1 ? patternsS : patternsB
+        liveNote := (relevantPatterns == "" ? "Pola: -" : relevantPatterns) + (contraryPatterns != "" ? "\nLawan: " + contraryPatterns : "") + (reverseOutput ? "\nREVERSE dari " + (sig == 1 ? "BUY" : "SELL") : "") + "\nSetup: " + f_method_explanation(chosenMethod) + "\nSkor skenario B " + f_num(biasUp) + " / S " + f_num(100 - biasUp) + " (skor)"
+        if chosenMethod == 3
+            liveNote += "\nZona break " + f_price(breakEntryLoX) + "–" + f_price(breakEntryHiX) + (breakPlanX.retested ? " | retest | zona " : " | 2 close | zona ") + f_num(breakGradeX)
+
+        liveNote += "\nRezim: " + (currentRegimeX == 1 ? "TREND" : currentRegimeX == 2 ? "RANGE" : "TRANSITION") + " | Proxy: " + (birthMacroCountX == 0 ? "data kosong" : birthMacroX > 0 ? "bullish" : birthMacroX < 0 ? "bearish" : "campuran")
+        livePos := pos
+        liveRegime := currentRegimeX
+        liveStopMovedAt := srcTime
+
+    // ===== INTRABAR / DEVELOPING BAR [0] IMMEDIATE TP & SL MONITOR =====
+    // Evaluates ONLY when the developing bar [0] opened AT OR AFTER liveBorn (time >= liveBorn) AND after the last stop update (time >= liveStopMovedAt).
+    // Never uses high/low from the entry bar itself or from before a stop move!
+    if liveSide != 0 and not na(liveBorn) and time >= liveBorn and time >= liveStopMovedAt
+        [curHitX, curFillX] = f_touch_bar(liveSide, liveSL, liveTP, open, high, low)
+        if curHitX != 0
+            float origRiskCurX = math.max(math.abs(liveEntry - liveInitialSL), syminfo.mintick)
+            bool movedStopCurX = liveSide * (liveSL - liveInitialSL) > syminfo.mintick * 0.5
+            resBorn := liveBorn
+            resTime := math.min(time_close, timenow)
+            resCode := curHitX == -1 or curHitX == 2 ? (movedStopCurX ? 5 : -1) : 1
+            resPrice := curFillX
+            lastExitTime := resTime
+            resSide := liveSide
+            resMethod := liveMethod
+            resRegime := liveRegime
+            resNote := liveNote
+            resContext := liveContext
+            resWhy := liveWhy
+            float curResultRX = (liveSide * (resPrice - liveEntry) - costPrice) / origRiskCurX
+            f_record_method(liveMethod, curResultRX, resTime, int(tfSecX * 1000), methodRing, methodCount, methodHead, methodWins, methodNet, methodStreak, methodUntil)
+            resE := liveEntry
+            resSL := liveInitialSL
+            resTP := liveTP
+            resQ := liveQ
+            resPos := livePos
+            if resCode == -1 and curResultRX < -0.05
+                totalLossStreakX += 1
+                sideLossCountX := liveSide == lastSLSide ? sideLossCountX + 1 : 1
+                scalpRearmX := false
+                lastSLTime := resTime
+                lastSLSide := liveSide
+                lastSLPrice := liveEntry
+                lastSLMethod := liveMethod
+            else if curResultRX > 0.05
+                totalLossStreakX := 0
+                sideLossCountX := 0
+                scalpRearmX := true
+            liveSide := 0
+            liveBorn := na
+            liveEntry := na
+            liveSL := na
+            liveTP := na
+            livePeakR := 0.0
+            liveMaxAdverseR := 0.0
+            liveQ := na
+            livePos := na
+
+    GGNativeState resultX = GGNativeState.new(srcTime, bias, sig, q, liveSide, liveBorn, liveEntry, liveSL, liveTP, liveQ, livePos, resBorn, resTime, resCode, resSide, resE, resSL, resTP, resQ, resPos, resPrice, liveMethod, resMethod, biasUp, liveNote, resNote, zoneMapX, liveInitialSL)
+    resultX.liveContext := liveContext
+    resultX.liveWhy := liveWhy
+    resultX.resContext := resContext
+    resultX.resWhy := resWhy
+    resultX.stopMovedAt := liveStopMovedAt
+    resultX.liveRegime := liveRegime
+    resultX.resRegime := resRegime
+    resultX
+
+// Compact UDT transport: closed native state, including immutable original risk.
+// Higher TF uses the previous native candle; lower TF returns all available samples.
+f_native_packet() =>
+    GGNativeState p = f_mtf_native_state()
+    p.sig := reverseOutput ? -p.sig : p.sig
+    p
+
+type GGNativeFeed
+    GGNativeState packetSec
+    array<GGNativeState> packetArr
+
+f_latest_packet(array<GGNativeState> packetsX, GGNativeState fallbackX) =>
+    GGNativeState resultX = fallbackX
+    if not na(packetsX)
+        if array.size(packetsX) > 0
+            resultX := array.last(packetsX)
+    resultX
+
+f_native_fields(GGNativeState p) =>
+    var GGNativeState emptyX = GGNativeState.new()
+    GGNativeState v = na(p) ? emptyX : p
+    [v.srcTime, v.bias, v.sig, v.q, v.liveSide, v.liveBorn, v.liveEntry, v.liveSL, v.liveTP, v.liveQ, v.livePos]
+// Exactly one backend executes for each requested timeframe on every chart bar.
+// The native expression is loop-invariant; horizon comes from its native context.
+var array<string> nativePeriods = str.split("5|15|60|240|D|W|30", "|")
+var array<GGNativeState> retainedNative = array.new<GGNativeState>(7, na)
+f_retain_native(int slotX, GGNativeState incomingX) =>
+    GGNativeState retainedX = array.get(retainedNative, slotX)
+    if not na(incomingX)
+        if not na(incomingX.srcTime) and (na(retainedX) or na(retainedX.srcTime) or incomingX.srcTime >= retainedX.srcTime)
+            retainedX := incomingX
+            array.set(retainedNative, slotX, retainedX)
+    retainedX
+
+GGNativeState nativePacketExpr = f_native_packet()
+array<GGNativeFeed> nativeFeeds = array.new<GGNativeFeed>()
+for nativeSlotX = 0 to 6
+    string nativePeriod = array.get(nativePeriods, nativeSlotX)
+    GGNativeState packetSecX = na
+    array<GGNativeState> packetArrX = na
+    if timeframe.in_seconds(nativePeriod) < timeframe.in_seconds()
+        packetArrX := request.security_lower_tf(syminfo.tickerid, nativePeriod, nativePacketExpr, ignore_invalid_timeframe = true, calc_bars_count = nativeHistoryBars)
+    else
+        packetSecX := request.security(syminfo.tickerid, nativePeriod, nativePacketExpr, lookahead = barmerge.lookahead_on, calc_bars_count = nativeHistoryBars)
+    // An empty LTF array is a temporary absence, not an exit or cancellation.
+    // Keep the most recent native snapshot across host bars. A newer explicit
+    // liveSide=0 packet still replaces it, so resolved positions cannot stay ACTIVE.
+    GGNativeState incomingX = f_latest_packet(packetArrX, packetSecX)
+    GGNativeState retainedX = f_retain_native(nativeSlotX, incomingX)
+    array.push(nativeFeeds, GGNativeFeed.new(retainedX, packetArrX))
+
+GGNativeFeed m5Feed = array.get(nativeFeeds, 0)
+GGNativeState m5PacketSec = m5Feed.packetSec
+array<GGNativeState> m5PacketArr = m5Feed.packetArr
+GGNativeState m5Detail = m5PacketSec
+[m5T, m5Bias, m5Sig, m5Q, m5Live, m5Born, m5E, m5SL, m5TP, m5LiveQ, m5LPos] = f_native_fields(m5Detail)
+
+GGNativeFeed m15Feed = array.get(nativeFeeds, 1)
+GGNativeState m15PacketSec = m15Feed.packetSec
+array<GGNativeState> m15PacketArr = m15Feed.packetArr
+GGNativeState m15Detail = m15PacketSec
+[m15T, m15Bias, m15Sig, m15Q, m15Live, m15Born, m15E, m15SL, m15TP, m15LiveQ, m15LPos] = f_native_fields(m15Detail)
+
+GGNativeFeed h1Feed = array.get(nativeFeeds, 2)
+GGNativeState h1PacketSec = h1Feed.packetSec
+array<GGNativeState> h1PacketArr = h1Feed.packetArr
+GGNativeState h1Detail = h1PacketSec
+[h1T, h1BiasMap, h1SigMap, h1Q, h1Live, h1Born, h1E, h1SL, h1TP, h1LiveQ, h1LPos] = f_native_fields(h1Detail)
+
+GGNativeFeed h4Feed = array.get(nativeFeeds, 3)
+GGNativeState h4PacketSec = h4Feed.packetSec
+array<GGNativeState> h4PacketArr = h4Feed.packetArr
+GGNativeState h4Detail = h4PacketSec
+[h4T, h4BiasMap, h4SigMap, h4Q, h4Live, h4Born, h4E, h4SL, h4TP, h4LiveQ, h4LPos] = f_native_fields(h4Detail)
+
+GGNativeFeed d1Feed = array.get(nativeFeeds, 4)
+GGNativeState d1PacketSec = d1Feed.packetSec
+array<GGNativeState> d1PacketArr = d1Feed.packetArr
+GGNativeState d1Detail = d1PacketSec
+[d1T, d1BiasMap, d1SigMap, d1Q, d1Live, d1Born, d1E, d1SL, d1TP, d1LiveQ, d1LPos] = f_native_fields(d1Detail)
+
+GGNativeFeed w1Feed = array.get(nativeFeeds, 5)
+GGNativeState w1PacketSec = w1Feed.packetSec
+array<GGNativeState> w1PacketArr = w1Feed.packetArr
+GGNativeState w1Detail = w1PacketSec
+[w1T, w1BiasMap, w1SigMap, w1Q, w1Live, w1Born, w1E, w1SL, w1TP, w1LiveQ, w1LPos] = f_native_fields(w1Detail)
+
+GGNativeFeed m30Feed = array.get(nativeFeeds, 6)
+GGNativeState m30Detail = m30Feed.packetSec
+
+// Cross-TF Intrabar Monitor: when viewing HTF signals (e.g. H1/H4 on an M15 chart), check if the current host bar (strictly after liveBorn and stopMovedAt) touched TP or SL so status updates immediately!
+array<int> hostHits = array.new<int>(7, 0)
+array<float> hostHitPrices = array.new<float>(7, na)
+for slotHitX = 0 to 6
+    GGNativeState detHitX = slotHitX == 0 ? m5Detail : slotHitX == 1 ? m15Detail : slotHitX == 2 ? h1Detail : slotHitX == 3 ? h4Detail : slotHitX == 4 ? d1Detail : slotHitX == 5 ? w1Detail : m30Detail
+    if not na(detHitX) and detHitX.liveSide != 0 and not na(detHitX.liveBorn) and time >= detHitX.liveBorn and time >= detHitX.stopMovedAt
+        [hCodeX, hFillX] = f_touch_bar(detHitX.liveSide, detHitX.liveSL, detHitX.liveTP, open, high, low)
+        if hCodeX != 0
+            array.set(hostHits, slotHitX, hCodeX)
+            array.set(hostHitPrices, slotHitX, hFillX)
+
+f_slot_detail(int slotX) =>
+    slotX == 0 ? m5Detail : slotX == 1 ? m15Detail : slotX == 2 ? h1Detail : slotX == 3 ? h4Detail : slotX == 4 ? d1Detail : slotX == 5 ? w1Detail : m30Detail
+
+// Uses only already-closed macro observations with valid timestamps.
+f_macro_at(int horizonX, int asOfX) =>
+    bool dailyX = horizonX >= 2
+    float usdX = dailyX ? dxyD : dxy
+    float usdEMA = dailyX ? dxyDEMA : dxyEMA
+    int usdT = dailyX ? dxyDTime : dxyTime
+    float yX = dailyX ? yieldD : bondYield
+    float yEMA = dailyX ? yieldDEMA : yieldEMA
+    int yT = dailyX ? yieldDTime : yieldTime
+    bool usdOK = useMacro and usdRelation != 0 and not na(usdX) and not na(usdEMA) and usdT <= asOfX and asOfX - usdT < 100 * 3600000
+    bool yOK = useMacro and isGold and usdRelation != 0 and not na(yX) and not na(yEMA) and yT <= asOfX and asOfX - yT < 100 * 3600000
+    float totalX = (usdOK ? math.sign(usdX - usdEMA) * usdRelation : 0.0) + (yOK ? -math.sign(yX - yEMA) : 0.0)
+    int countX = (usdOK ? 1 : 0) + (yOK ? 1 : 0)
+    [countX > 0 ? totalX / countX : 0.0, countX]
+f_manual_at(int asOfX) =>
+    asOfX >= fundamentalFrom and asOfX <= fundamentalUntil and fundamentalUntil > fundamentalFrom ? (fundamentalView == "Bullish" ? 1.0 : fundamentalView == "Bearish" ? -1.0 : 0.0) : 0.0
+f_forward_score(int slotX) =>
+    GGNativeState nativeX = f_slot_detail(slotX)
+    int parentSlotX = slotX == 0 ? 1 : slotX == 1 or slotX == 6 ? 2 : slotX == 2 ? 3 : slotX == 3 ? 4 : slotX == 4 ? 5 : -1
+    GGNativeState parentX = parentSlotX >= 0 ? f_slot_detail(parentSlotX) : na
+    int horX = slotX < 2 ? 1 : slotX < 4 or slotX == 6 ? 2 : 3
+    int asOfX = time_close[1]
+    [macroX, countX] = f_macro_at(horX, asOfX)
+    float higherX = na(parentX) ? 0.0 : nz(parentX.biasUp, 50.0) - 50.0
+    na(nativeX) or na(nativeX.biasUp) ? na : math.round(f_clamp(nativeX.biasUp + 0.20 * higherX + 8.0 * macroX + fundamentalWeight * f_manual_at(asOfX), 10.0, 90.0))
+
+f_bias_pair(float upX) =>
+    na(upX) ? "DATA BELUM CUKUP" : "NAIK " + str.tostring(upX, "#") + " | TURUN " + str.tostring(100.0 - upX, "#")
+f_tf_bias_summary() =>
+    string txtX = ""
+    for slotX = 0 to 6
+        GGNativeState dX = f_slot_detail(slotX)
+        txtX += "\n" + (slotX == 0 ? "M5" : slotX == 1 ? "M15" : slotX == 2 ? "H1" : slotX == 3 ? "H4" : slotX == 4 ? "D1" : slotX == 5 ? "W1" : "M30") + "  " + f_bias_pair(f_forward_score(slotX))
+    txtX
+
+// All discretionary exits now resolve INSIDE the native lifecycle.
+array<bool> hostCuts = array.new<bool>(7, false)
+
+// ===== DAILY LEDGER + CONFLUENCE ENGINE (v1.23.0) =====
+// One merged ledger for M5/M15/H1/H4/D1/W1. Daily stats use input tz; completed drawings retain the configured history days.
+// Technical triggers still come from the canonical native state; the engine below decides whether the trigger is
+// ACTIVE (actionable) or SKIP (filtered). Skipped signals keep being tracked, so you can see what the filter avoided.
+int ledgerClock = math.min(time_close, timenow)
+int dayStartNow = timestamp(tz, year(ledgerClock, tz), month(ledgerClock, tz), dayofmonth(ledgerClock, tz), 0, 0, 0)
+var array<string> lgNote = array.new<string>()
+var array<int> lgMethod = array.new<int>()
+var array<int> lgSlot = array.new<int>()
+var array<int> lgBorn = array.new<int>()
+var array<int> lgSide = array.new<int>()
+var array<float> lgE = array.new<float>()
+var array<float> lgSL = array.new<float>()
+var array<float> lgTP = array.new<float>()
+var array<float> lgCtx = array.new<float>()
+var array<int> lgSkip = array.new<int>()
+var array<string> lgWhy = array.new<string>()
+var array<int> lgRes = array.new<int>() // 0 open, 1 WIN, -1 LOSS/CUT, 2 FLAT (net of costs)
+var array<int> lgEnd = array.new<int>()
+var array<float> lgR = array.new<float>()
+var array<string> lgKind = array.new<string>()
+var array<label> lgLbl = array.new<label>()
+var array<line> lgLn = array.new<line>()
+var array<int> slotLastRes = array.new<int>(7, 0)
+
+f_slot_name(int s) =>
+    s == 0 ? "M5" : s == 1 ? "M15" : s == 2 ? "H1" : s == 3 ? "H4" : s == 4 ? "D1" : s == 5 ? "W1" : "M30"
+f_slot_hor(int s) =>
+    s <= 1 ? 1 : s <= 3 or s == 6 ? 2 : 3
+f_signed_r(float x) =>
+    (x >= 0 ? "+" : "-") + str.tostring(math.abs(math.round(x, 2))) + "R"
+
+f_lg_find(int slotX, int bornX) =>
+    int idx = -1
+    int n = array.size(lgBorn)
+    if n > 0
+        for i = n - 1 to 0
+            if array.get(lgSlot, i) == slotX and array.get(lgBorn, i) == bornX
+                idx := i
+                break
+    idx
+
+f_lg_limit_drawings() =>
+    int visibleX = 0
+    int nX = array.size(lgBorn)
+    if nX > 0
+        array<int> slotCountsX = array.new<int>(7, 0)
+        // Cap M5 (slot 0) and M15 (slot 1) so M30, H1, H4, D1, W1 always retain dedicated visibility slots on the chart.
+        int m5CapX = math.max(12, int(visibleHistoryLimit * 0.25))
+        int m15CapX = math.max(12, int(visibleHistoryLimit * 0.25))
+        array<float> keysX = array.new<float>()
+        for iX = 0 to nX - 1
+            int sX = array.get(lgSlot, iX)
+            // Prioritize higher timeframes in drawing retention so H1/H4/D1/W1 are never evicted by M5 noise.
+            float tfWeightX = (sX == 5 ? 6.0 : sX == 4 ? 5.0 : sX == 3 ? 4.0 : sX == 2 ? 3.0 : sX == 6 ? 2.0 : sX == 1 ? 1.0 : 0.0) * 86400000.0 * 3.0
+            array.push(keysX, float(array.get(lgBorn, iX)) + tfWeightX)
+        array<int> orderedX = array.sort_indices(keysX, order.descending)
+        for iX in orderedX
+            label lbX = array.get(lgLbl, iX)
+            if not na(lbX)
+                int sX = array.get(lgSlot, iX)
+                int scX = array.get(slotCountsX, sX) + 1
+                array.set(slotCountsX, sX, scX)
+                bool overSlotCapX = (sX == 0 and scX > m5CapX) or (sX == 1 and scX > m15CapX)
+                visibleX += 1
+                if visibleX > visibleHistoryLimit or overSlotCapX
+                    label.delete(lbX)
+                    line.delete(array.get(lgLn, iX))
+                    array.set(lgLbl, iX, na)
+                    array.set(lgLn, iX, na)
+                    if overSlotCapX
+                        visibleX -= 1
+    0
+
+f_note_summary(string noteX) =>
+    array<string> partsX = str.split(noteX, "\n")
+    string tX = array.size(partsX) > 0 ? array.get(partsX, 0) : ""
+    tX := str.length(tX) > 48 ? str.substring(tX, 0, 48) + "…" : tX
+    for pX in partsX
+        if str.contains(pX, "Skor skenario")
+            tX += "\n" + pX
+            break
+    tX
+
+f_lg_draw(int idx) =>
+    if idx >= 0
+        label oldL = array.get(lgLbl, idx)
+        line oldN = array.get(lgLn, idx)
+        if not na(oldL)
+            label.delete(oldL)
+        if not na(oldN)
+            line.delete(oldN)
+        label newL = na
+        line newN = na
+        int skipV = array.get(lgSkip, idx)
+        int resV = array.get(lgRes, idx)
+        int bornT = array.get(lgBorn, idx)
+        int endT = array.get(lgEnd, idx)
+        int horDrawX = f_slot_hor(array.get(lgSlot, idx))
+        int retentionDaysX = horDrawX == 3 ? math.max(resolvedHistoryDays * 4, 60) : horDrawX == 2 ? math.max(resolvedHistoryDays * 2, 30) : resolvedHistoryDays
+        bool historyOK = bornT >= dayStartNow - retentionDaysX * 86400000 or (not na(endT) and endT >= dayStartNow - retentionDaysX * 86400000)
+        bool wantDraw = showLedger and historyOK and (resV != 0 or skipV == 1) and (skipV == 0 or showSkipped)
+        if wantDraw
+            int sideV = array.get(lgSide, idx)
+            float eV = array.get(lgE, idx)
+            float rV = array.get(lgR, idx)
+            float cV = array.get(lgCtx, idx)
+            string kindT = array.get(lgKind, idx)
+            string nameT = f_slot_name(array.get(lgSlot, idx)) + " " + f_setup_name(array.get(lgMethod, idx))
+            string sideT = sideV == 1 ? "BUY" : "SELL"
+            // WIN follows net realized R, including profitable trailing/structure exits.
+            string outT = resV == 1 ? "WIN " + kindT + " " + f_signed_r(rV) : kindT == "SL" ? "LOSS SL " + f_signed_r(rV) : "EXIT " + kindT + " " + f_signed_r(rV)
+            string txt = skipV == 1 ? nameT + " " + sideT + " SKIP • " + array.get(lgWhy, idx) + (resV != 0 ? "\nandai masuk: " + outT : "") : nameT + " " + sideT + " " + outT + " • " + f_tier(cV) + " " + f_num(cV)
+            string noteV = array.get(lgNote, idx)
+            txt += "\n" + (showPatternNotes ? noteV : f_note_summary(noteV))
+            string hintV = noteV + "\nE " + f_price(eV) + " | SL " + f_price(array.get(lgSL, idx)) + " | TP " + f_price(array.get(lgTP, idx)) + "\nExit " + kindT + " " + f_signed_r(rV)
+            float exitPxDrawX = eV + sideV * (rV * math.max(math.abs(eV - array.get(lgSL, idx)), syminfo.mintick) + costPrice)
+            if compactLabels
+                txt := nameT + " " + sideT + " • " + outT
+            // Compact mode never hides the agreed entry/target/original stop + actual exit fill price.
+            txt += "\n" + f_levels(eV, array.get(lgTP, idx), array.get(lgSL, idx)) + " | X " + f_price(exitPxDrawX)
+            color col = skipV == 1 ? color.new(color.gray, 45) : resV == 1 ? color.new(color.green, 5) : kindT == "SL" ? color.new(color.red, 10) : color.new(color.blue, 15)
+            newL := f_label(bornT, eV, txt, locX = xloc.bar_time, styleX = sideV == 1 ? label.style_label_up : label.style_label_down, colX = col, sizeX = size.tiny, hintX = hintV)
+            if not na(endT) and endT > bornT
+                newN := line.new(bornT, eV, endT, eV, xloc = xloc.bar_time, color = color.new(col, 30), style = line.style_dotted, width = 1)
+        array.set(lgLbl, idx, newL)
+        array.set(lgLn, idx, newN)
+        f_lg_limit_drawings()
+
+f_lg_ensure(int slotX, int horX, int bornX, int sideX, float eX, float slX, float tpX, float qX, float posX, int endT, int methodX, string noteX, float frozenContextX, string frozenWhyX) =>
+    int idx = -1
+    bool okData = not na(bornX) and sideX != 0 and not na(eX) and not na(slX) and not na(tpX)
+    if okData
+        idx := f_lg_find(slotX, bornX)
+        if idx < 0
+            int retentionEnsureDaysX = horX == 3 ? math.max(resolvedHistoryDays * 4, 60) : horX == 2 ? math.max(resolvedHistoryDays * 2, 30) : resolvedHistoryDays
+            bool relevant = na(endT) ? bornX >= dayStartNow - f_mtf_life_ms(horX) : endT >= dayStartNow - retentionEnsureDaysX * 86400000
+            if relevant
+                float cs = frozenContextX
+                string whyV = frozenWhyX
+                int skipV = (ctxFilter and whyV != "") or (outputTrendGuard and whyV == "OUTPUT: dua TF atas lawan") ? 1 : 0
+                array.push(lgNote, noteX)
+                array.push(lgMethod, methodX)
+                array.push(lgSlot, slotX)
+                array.push(lgBorn, bornX)
+                array.push(lgSide, sideX)
+                array.push(lgE, eX)
+                array.push(lgSL, slX)
+                array.push(lgTP, tpX)
+                array.push(lgCtx, cs)
+                array.push(lgSkip, skipV)
+                array.push(lgWhy, whyV)
+                array.push(lgRes, 0)
+                array.push(lgEnd, int(na))
+                array.push(lgR, 0.0)
+                array.push(lgKind, "")
+                label nl = na
+                line nn = na
+                array.push(lgLbl, nl)
+                array.push(lgLn, nn)
+                idx := array.size(lgBorn) - 1
+                if skipV == 1
+                    f_lg_draw(idx)
+    idx
+
+// Permanent Cumulative Statistics UDT (mutating UDT fields inside functions is native to Pine Script v6; never altered when visual labels are purged)
+type GGPermStats
+    int totalClosed = 0
+    int tpHits = 0
+    int profExits = 0
+    int slHits = 0
+    int cutHits = 0
+    int beTrailHits = 0
+    int staleHits = 0
+    float sumWinR = 0.0
+    float sumLossR = 0.0
+    int winCount = 0
+    int lossCount = 0
+    float cumR = 0.0
+    float peakR = 0.0
+    float maxDdR = 0.0
+    int curLossStreak = 0
+    int maxLossStreak = 0
+
+var GGPermStats permStats = GGPermStats.new()
+var array<int> permTfTotal = array.new<int>(7, 0)
+var array<int> permTfTp = array.new<int>(7, 0)
+var array<int> permTfProf = array.new<int>(7, 0)
+var array<float> permTfNetR = array.new<float>(7, 0.0)
+
+f_lg_resolve(int idx, int resX, string kindX, int endT, float pxX) =>
+    if idx >= 0
+        if array.get(lgRes, idx) == 0
+            int sideV = array.get(lgSide, idx)
+            float eV = array.get(lgE, idx)
+            float slV = array.get(lgSL, idx)
+            float tpV = array.get(lgTP, idx)
+            float risk = math.max(math.abs(eV - slV), syminfo.mintick)
+            float exitPx = not na(pxX) ? pxX : kindX == "TP" ? tpV : kindX == "SL" ? (slV - sideV * slippagePrice) : eV
+            float rV = (sideV * (exitPx - eV) - costPrice) / risk
+            int netResult = rV > 0.000001 ? 1 : rV < -0.000001 ? -1 : 2
+            array.set(lgRes, idx, netResult)
+            array.set(lgEnd, idx, endT)
+            array.set(lgR, idx, rV)
+            array.set(lgKind, idx, kindX)
+            // Record into Permanent Statistics UDT if actionable (skip == 0)
+            if array.get(lgSkip, idx) == 0
+                permStats.totalClosed += 1
+                int sSlot = array.get(lgSlot, idx)
+                array.set(permTfTotal, sSlot, array.get(permTfTotal, sSlot) + 1)
+                array.set(permTfNetR, sSlot, array.get(permTfNetR, sSlot) + rV)
+                if kindX == "TP" and netResult == 1
+                    permStats.tpHits += 1
+                    array.set(permTfTp, sSlot, array.get(permTfTp, sSlot) + 1)
+                if netResult == 1
+                    permStats.profExits += 1
+                    permStats.winCount += 1
+                    permStats.sumWinR += rV
+                    permStats.curLossStreak := 0
+                    array.set(permTfProf, sSlot, array.get(permTfProf, sSlot) + 1)
+                else
+                    permStats.lossCount += 1
+                    permStats.sumLossR += math.abs(rV)
+                    permStats.curLossStreak += 1
+                    permStats.maxLossStreak := math.max(permStats.maxLossStreak, permStats.curLossStreak)
+                if kindX == "SL"
+                    permStats.slHits += 1
+                else if kindX == "CUT LOSS" or kindX == "STRUCTURE" or kindX == "FAILED BREAK"
+                    permStats.cutHits += 1
+                else if kindX == "TRAIL/BE"
+                    permStats.beTrailHits += 1
+                else if kindX == "STALE"
+                    permStats.staleHits += 1
+                permStats.cumR += rV
+                permStats.peakR := math.max(permStats.peakR, permStats.cumR)
+                permStats.maxDdR := math.max(permStats.maxDdR, permStats.peakR - permStats.cumR)
+            f_lg_draw(idx)
+
+f_lg_purge() =>
+    int n = array.size(lgBorn)
+    if n > 0
+        for i = n - 1 to 0
+            int rV = array.get(lgRes, i)
+            int endV = array.get(lgEnd, i)
+            int bV = array.get(lgBorn, i)
+            int horPurgeX = f_slot_hor(array.get(lgSlot, i))
+            int retentionPurgeDaysX = horPurgeX == 3 ? math.max(resolvedHistoryDays * 4, 60) : horPurgeX == 2 ? math.max(resolvedHistoryDays * 2, 30) : resolvedHistoryDays
+            bool oldV = rV != 0 ? endV < dayStartNow - retentionPurgeDaysX * 86400000 : bV < dayStartNow - 60 * 86400000
+            if oldV
+                label lOld = array.get(lgLbl, i)
+                line nOld = array.get(lgLn, i)
+                if not na(lOld)
+                    label.delete(lOld)
+                if not na(nOld)
+                    line.delete(nOld)
+                array.remove(lgNote, i)
+                array.remove(lgMethod, i)
+                array.remove(lgSlot, i)
+                array.remove(lgBorn, i)
+                array.remove(lgSide, i)
+                array.remove(lgE, i)
+                array.remove(lgSL, i)
+                array.remove(lgTP, i)
+                array.remove(lgCtx, i)
+                array.remove(lgSkip, i)
+                array.remove(lgWhy, i)
+                array.remove(lgRes, i)
+                array.remove(lgEnd, i)
+                array.remove(lgR, i)
+                array.remove(lgKind, i)
+                array.remove(lgLbl, i)
+                array.remove(lgLn, i)
+
+
+// Reads every native sample (all intrabars when the target TF is below the chart TF) so no birth / resolution is missed.
+f_ingest(int slotX, int horX, array<GGNativeState> packetsX, GGNativeState fallbackX) =>
+    bool useArrX = false
+    if not na(packetsX)
+        useArrX := array.size(packetsX) > 0
+    int nX = useArrX ? array.size(packetsX) : 1
+    for kX = 0 to nX - 1
+        GGNativeState packetX = useArrX ? array.get(packetsX, kX) : fallbackX
+        if not na(packetX)
+            if packetX.liveSide != 0 and not na(packetX.liveBorn)
+                f_lg_ensure(slotX, horX, packetX.liveBorn, packetX.liveSide, packetX.liveEntry, packetX.initialSL, packetX.liveTP, packetX.liveQ, packetX.livePos, int(na), packetX.liveMethod, packetX.liveNote, packetX.liveContext, packetX.liveWhy)
+            if not na(packetX.resBorn) and packetX.resBorn != nz(array.get(slotLastRes, slotX), 0)
+                int idx = f_lg_ensure(slotX, horX, packetX.resBorn, packetX.resSide, packetX.resE, packetX.resSL, packetX.resTP, packetX.resQ, packetX.resPos, packetX.resTime, packetX.resMethod, packetX.resNote, packetX.resContext, packetX.resWhy)
+                if idx >= 0
+                    string kindX = packetX.resCode == 1 ? "TP" : packetX.resCode == -1 ? "SL" : packetX.resCode == 5 ? "TRAIL/BE" : packetX.resCode == 6 ? "CUT LOSS" : packetX.resCode == 2 ? "STRUCTURE" : packetX.resCode == 4 ? "FAILED BREAK" : "STALE"
+                    f_lg_resolve(idx, packetX.resCode, kindX, packetX.resTime, packetX.resPrice)
+                array.set(slotLastRes, slotX, packetX.resBorn)
+
+f_lg_is_open(int slotX, int bornX) =>
+    int idx = f_lg_find(slotX, bornX)
+    idx < 0 ? true : array.get(lgRes, idx) == 0
+
+// Host-side live events (intrabar SL/TP touch, Breakout Defense cut) + read back the confluence verdict of the current signal.
+f_track(int slotX, int horX, int liveX, int bornX, float eX, float slX, float tpX, float qX, float posX, int hitX, bool cutX, float hitPriceX) =>
+    GGNativeState detailX = f_slot_detail(slotX)
+    int methodX = na(detailX) ? 0 : detailX.liveMethod
+    int idx = liveX != 0 ? f_lg_ensure(slotX, horX, bornX, liveX, eX, na(detailX) ? slX : detailX.initialSL, tpX, qX, posX, int(na), methodX, na(detailX) ? "" : detailX.liveNote, na(detailX) ? na : detailX.liveContext, na(detailX) ? "" : detailX.liveWhy) : -1
+    int nowT = math.min(time_close, timenow)
+    if idx >= 0 and array.get(lgRes, idx) == 0 and hitX != 0
+        float initSLTrackX = na(detailX) ? slX : detailX.initialSL
+        bool movedTrackX = liveX * (slX - initSLTrackX) > syminfo.mintick * 0.5
+        int hResCodeX = hitX == -1 or hitX == 2 ? (movedTrackX ? 5 : -1) : 1
+        string hKindX = hResCodeX == 1 ? "TP" : hResCodeX == 5 ? "TRAIL/BE" : "SL"
+        f_lg_resolve(idx, hResCodeX, hKindX, nowT, hitPriceX)
+    int skipOut = idx >= 0 ? array.get(lgSkip, idx) : 0
+    float ctxOut = idx >= 0 ? array.get(lgCtx, idx) : na
+    string whyOut = idx >= 0 ? array.get(lgWhy, idx) : ""
+    [skipOut, ctxOut, whyOut]
+
+f_lg_purge()
+for slotX = 0 to 6
+    GGNativeFeed feedX = array.get(nativeFeeds, slotX)
+    f_ingest(slotX, f_slot_hor(slotX), feedX.packetArr, feedX.packetSec)
+array<int> hostSkips = array.new<int>()
+array<float> hostContexts = array.new<float>()
+array<int> hostViews = array.new<int>()
+for slotX = 0 to 6
+    GGNativeState detailX = f_slot_detail(slotX)
+    [srcX, biasX, sigX, watchQX, liveX, bornX, entryX, slX, tpX, qX, posX] = f_native_fields(detailX)
+    int hitX = array.get(hostHits, slotX)
+    bool cutX = array.get(hostCuts, slotX)
+    [skipX, ctxX, whyX] = f_track(slotX, f_slot_hor(slotX), liveX, bornX, entryX, slX, tpX, qX, posX, hitX, cutX, array.get(hostHitPrices, slotX))
+    array.push(hostSkips, skipX)
+    array.push(hostContexts, ctxX)
+for slotX = 0 to 6
+    GGNativeState detailX = f_slot_detail(slotX)
+    int bornX = na(detailX) ? int(na) : detailX.liveBorn
+    int liveX = na(detailX) ? int(na) : detailX.liveSide
+    array.push(hostViews, array.get(hostHits, slotX) == 0 and not array.get(hostCuts, slotX) and array.get(hostSkips, slotX) == 0 and f_lg_is_open(slotX, bornX) ? liveX : 0)
+float m5Ctx = array.get(hostContexts, 0)
+float m15Ctx = array.get(hostContexts, 1)
+int m5LiveView = array.get(hostViews, 0)
+int m15LiveView = array.get(hostViews, 1)
+
+// ===== SCALP CONFLICT RESOLVER =====
+// M15 is the anchor/context and M5 is the execution trigger, but GoldGuard does
+// not publish two opposite actionable scalp signals at the same time. If both
+// are ACTIVE and disagree, the only actionable decision is WAIT CONFLICT.
+// The raw M5/M15 rows remain visible as CONTEXT so the user can understand why.
+bool scalpConflict = scalpConflictGuard and m5LiveView != 0 and m15LiveView != 0 and m5LiveView != m15LiveView
+bool scalpAligned = m5LiveView != 0 and m15LiveView != 0 and m5LiveView == m15LiveView
+int scalpMasterSide = scalpConflict ? 0 : m5LiveView != 0 ? m5LiveView : m15LiveView
+string scalpMasterSource = scalpConflict ? "M5 vs M15" : scalpAligned ? "M5+M15" : m5LiveView != 0 ? "M5" : m15LiveView != 0 ? "M15" : "-"
+int scalpMasterBorn = scalpMasterSide == 0 ? na : m5LiveView != 0 ? m5Born : m15Born
+float scalpMasterE = scalpMasterSide == 0 ? na : m5LiveView != 0 ? m5E : m15E
+float scalpMasterSL = scalpMasterSide == 0 ? na : m5LiveView != 0 ? m5SL : m15SL
+float scalpMasterTP = scalpMasterSide == 0 ? na : m5LiveView != 0 ? m5TP : m15TP
+float scalpMasterQ = scalpMasterSide == 0 ? na : scalpAligned ? math.max(nz(m5Ctx, 0.0), nz(m15Ctx, 0.0)) : m5LiveView != 0 ? m5Ctx : m15Ctx
+
+// ACTIVE labels are a direct projection of the exact canonical table state.
+// No second lifecycle exists on the host chart anymore.
+var array<box> classicTPBoxes = array.new<box>(7, na)
+var array<box> classicSLBoxes = array.new<box>(7, na)
+var array<line> classicEntryLines = array.new<line>(7, na)
+var array<label> classicTPLabels = array.new<label>(7, na)
+var array<label> classicSLLabels = array.new<label>(7, na)
+f_sync_active_area(int slotX, string tfX, int horizonX, int sideX, int bornX, float eX, float slX, float tpX, string tagX) =>
+    box.delete(array.get(classicTPBoxes, slotX))
+    box.delete(array.get(classicSLBoxes, slotX))
+    line.delete(array.get(classicEntryLines, slotX))
+    label.delete(array.get(classicTPLabels, slotX))
+    label.delete(array.get(classicSLLabels, slotX))
+    array.set(classicTPBoxes, slotX, na)
+    array.set(classicSLBoxes, slotX, na)
+    array.set(classicEntryLines, slotX, na)
+    array.set(classicTPLabels, slotX, na)
+    array.set(classicSLLabels, slotX, na)
+    bool scopeX = activeAreaScope == "Semua" or (activeAreaScope == "Scalp" and horizonX == 1) or (activeAreaScope == "Intraday" and horizonX == 2) or (activeAreaScope == "Swing" and horizonX == 3)
+    bool drawX = showActiveAreas and scopeX and tagX == "ACTIVE" and sideX != 0 and not na(bornX) and not na(eX) and not na(slX) and not na(tpX)
+    if drawX
+        int chartMsX = int(timeframe.in_seconds() * 1000)
+        int leftX = math.max(bornX, time - chartMsX * 160)
+        int rightX = time_close + chartMsX * (activeAreaBars + slotX * 3)
+        string sideTxt = "ACTIVE " + tfX + (sideX == 1 ? " BUY" : " SELL")
+        box tpBoxX = box.new(leftX, math.max(eX, tpX), rightX, math.min(eX, tpX), xloc = xloc.bar_time, bgcolor = color.new(color.green, 87), border_color = color.new(color.lime, 30))
+        box slBoxX = box.new(leftX, math.max(eX, slX), rightX, math.min(eX, slX), xloc = xloc.bar_time, bgcolor = color.new(color.red, 89), border_color = color.new(color.red, 30))
+        line entryLineX = line.new(leftX, eX, rightX, eX, xloc = xloc.bar_time, color = color.orange, style = line.style_dashed, width = 1)
+        label tpLabelX = f_label(rightX, tpX, sideTxt + " TP " + f_price(tpX), locX = xloc.bar_time, styleX = label.style_label_left, colX = color.new(color.orange, 8), sizeX = size.small)
+        label slLabelX = f_label(rightX, slX, sideTxt + " SL " + f_price(slX), locX = xloc.bar_time, styleX = label.style_label_left, colX = color.new(color.orange, 8), sizeX = size.small)
+        label.set_textcolor(tpLabelX, color.black)
+        label.set_textcolor(slLabelX, color.black)
+        array.set(classicTPBoxes, slotX, tpBoxX)
+        array.set(classicSLBoxes, slotX, slBoxX)
+        array.set(classicEntryLines, slotX, entryLineX)
+        array.set(classicTPLabels, slotX, tpLabelX)
+        array.set(classicSLLabels, slotX, slLabelX)
+
+var array<label> mtfLiveLabels = array.new<label>(7, na)
+var array<int> mtfLiveLabelSides = array.new<int>(7, 0)
+f_sync_mtf_label(int slot, string tfX, int horizonX, int liveSideX, int bornX, float eX, float slX, float tpX, float qX, string tagX) =>
+    f_sync_active_area(slot, tfX, horizonX, liveSideX, bornX, eX, slX, tpX, tagX)
+    label lb = array.get(mtfLiveLabels, slot)
+    int oldSide = array.get(mtfLiveLabelSides, slot)
+    bool visible = showMTFMap and showMTFLabels and liveSideX != 0 and not na(bornX) and not na(eX) and not na(slX) and not na(tpX)
+    if visible
+        float slP = math.abs(eX - slX) / goldPipSize
+        float tpP = math.abs(tpX - eX) / goldPipSize
+        GGNativeState detailX = f_slot_detail(slot == 0 and tfX == "M15" ? 1 : slot)
+        string methodTextX = na(detailX) ? "" : f_setup_name(detailX.liveMethod)
+        string txt = tagX + " " + methodTextX + " " + tfX + " " + f_horizon_name(horizonX) + " " + (liveSideX == 1 ? "BUY" : "SELL") + " • " + f_tier(qX) + " " + f_num(qX) + "\nE " + f_price(eX) + " | SL " + f_price(slX) + " (" + f_num(slP) + "p)\nTP " + f_price(tpX) + " (" + f_num(tpP) + "p)"
+        string liveHintX = ""
+        if not na(detailX)
+            int noteIdxX = f_lg_find(slot == 0 and tfX == "M15" ? 1 : slot, bornX)
+            liveHintX := noteIdxX >= 0 ? array.get(lgNote, noteIdxX) : detailX.liveNote
+            txt += "\n" + (showPatternNotes ? liveHintX : f_note_summary(liveHintX))
+        if compactLabels
+            txt := tagX + " " + tfX + " " + (liveSideX == 1 ? "BUY" : "SELL") + " • " + methodTextX + " " + f_num(qX) + "\n" + f_levels(eX, tpX, slX)
+        liveHintX += "\n" + f_levels(eX, tpX, slX)
+        if not na(detailX) and math.abs(detailX.initialSL - slX) >= syminfo.mintick
+            txt += "\nSL awal " + f_price(detailX.initialSL) + " | SL kini dikelola"
+            liveHintX += "\nSL awal " + f_price(detailX.initialSL)
+        color colX = tagX == "ACTIVE" ? color.new(color.orange, 8) : color.new(color.gray, 25)
+        if na(lb) or oldSide != liveSideX
+            if not na(lb)
+                label.delete(lb)
+            lb := f_label(bornX, eX, txt, locX = xloc.bar_time, styleX = liveSideX == 1 ? label.style_label_up : label.style_label_down, colX = colX, sizeX = size.tiny, hintX = liveHintX)
+            array.set(mtfLiveLabels, slot, lb)
+            array.set(mtfLiveLabelSides, slot, liveSideX)
+        else
+            label.set_x(lb, bornX)
+            label.set_y(lb, eX)
+            label.set_text(lb, txt)
+            label.set_tooltip(lb, liveHintX)
+            label.set_color(lb, colX)
+            label.set_size(lb, size.tiny)
+        label.set_textcolor(lb, tagX == "ACTIVE" ? color.black : color.white)
+    else if not na(lb)
+        label.delete(lb)
+        array.set(mtfLiveLabels, slot, na)
+        array.set(mtfLiveLabelSides, slot, 0)
+
+if barstate.islast
+    f_lg_limit_drawings()
+
+if barstate.islast
+    for slotX = 0 to 6
+        GGNativeState detailX = f_slot_detail(slotX)
+        [srcX, biasX, sigX, watchQX, liveX, bornX, entryX, slX, tpX, qX, posX] = f_native_fields(detailX)
+        string tagX = scalpConflict and slotX < 2 ? "CONTEXT" : "ACTIVE"
+        f_sync_mtf_label(slotX, f_slot_name(slotX), f_slot_hor(slotX), array.get(hostViews, slotX), bornX, entryX, slX, tpX, array.get(hostContexts, slotX), tagX)
+
+// ===== POSSIBLE MAP: chart-TF scenario, separate from canonical MTF trades =====
+// No scenario score creates a trade, changes a result, or fires an alert. Scores
+// Scenario scores are heuristic and are not calibrated probabilities.
+
+
+f_map_plan(int sideX, float levelX, float anchorX, float targetWallX, float atrX, int horizonX) =>
+    float entryX = na(levelX) ? na : f_round(levelX)
+    float halfX = math.max(syminfo.mintick, possibleWidthATR * atrX)
+    float atrStopX = horizonX == 1 ? scalpStopATR + (timeframe.in_seconds() <= 300 ? scalpM5ExtraATR : 0.0) : horizonX == 2 ? intradayStopATR : swingStopATR
+    float minStopX = isGold ? (horizonX == 1 ? scalpMinPips : horizonX == 2 ? intradayMinPips : swingMinPips) * goldPipSize : atrStopX * atrX
+    // SL is beyond BOTH the complete entry band and all adjacent structures.
+    float structuralX = sideX == 1 ? math.min(anchorX, entryX - halfX) : math.max(anchorX, entryX + halfX)
+    float riskX = math.max(minStopX, math.max(atrStopX * atrX, sideX * (entryX - structuralX) + (horizonX == 1 ? math.max(srBufferATR, scalpSLBufferATR) : srBufferATR) * atrX))
+    float rawStopX = entryX - sideX * riskX
+    float slX = (sideX == 1 ? math.floor(rawStopX / syminfo.mintick) : math.ceil(rawStopX / syminfo.mintick)) * syminfo.mintick
+    riskX := sideX * (entryX - slX)
+    // A target must have an observed opposing level. Never invent a distant TP.
+    float roomX = sideX * (targetWallX - entryX) - 0.20 * atrX
+    float rrX = horizonX == 1 ? 1.65 : horizonX == 2 ? 1.65 : 1.85
+    float rewardX = math.min(rrX * riskX, roomX)
+    float tpX = f_round(entryX + sideX * rewardX)
+    // Conservative RR uses the worst fill inside the proposed entry zone.
+    float worstEntryX = entryX + sideX * halfX
+    float netX = (sideX * (tpX - worstEntryX) - costPrice) / math.max(sideX * (worstEntryX - slX) + costPrice, syminfo.mintick)
+    bool validX = not na(entryX) and not na(targetWallX) and not na(anchorX) and not na(atrX) and atrX > 0 and riskX > 0 and riskX <= classicMaxRiskATR * atrX and roomX >= srMinRoomATR * atrX and netX >= classicMinNetRR and costPrice <= riskX * 0.20 and sideX * (tpX - worstEntryX) > 0
+    [validX, entryX, slX, tpX, netX]
+
+// Display projection of the SAME native zones used by breakout and retest.
+// xloc.bar_time preserves M5...W1 boxes when switching chart timeframe.
+type GGMapZone
+    int born
+    int side
+    float lo
+    float hi
+    float quality
+    string name
+    string status
+    int tests
+    int pending
+    string origin
+    bool strong
+    string tf
+
+var array<box> strongZoneBoxes = array.new<box>(64, na)
+array<GGMapZone> mapZones = array.new<GGMapZone>()
+float mapC = close[1]
+float mapATR = atr[1]
+float possibleSupport = na
+float possibleResistance = na
+float possibleBuyAnchor = na
+float possibleSellAnchor = na
+float possibleBuyWall = na
+float possibleSellWall = na
+string possibleSupportKind = "SUPPORT"
+string possibleResistanceKind = "RESISTANCE"
+// The chart-only pool also records past S/R strength; native trade pools do not.
+var array<GGZoneHistory> chartZoneHistoryX = array.new<GGZoneHistory>()
+[chartBrSideX, chartBrLoX, chartBrHiX, _, _, _, _, _, _, _, _, _, chartBrGradeX, chartZoneMapX] = f_zone_snapshot(chartZoneHistoryX)
+bool chartHasNativeZoneX = false
+for nativeZonePeriodX in nativePeriods
+    if timeframe.in_seconds(nativeZonePeriodX) == timeframe.in_seconds()
+        chartHasNativeZoneX := true
+// Exactly one map source: native packet for a supported TF, chart pool otherwise.
+string customZoneMapX = chartHasNativeZoneX ? "" : chartZoneMapX
+if barstate.islast
+    for slotX = 0 to 7
+        GGNativeState packetX = slotX < 7 ? f_slot_detail(slotX) : na
+        bool matchingX = slotX == 7 ? customZoneMapX != "" : timeframe.in_seconds(array.get(nativePeriods, slotX)) == timeframe.in_seconds()
+        string zoneTextX = slotX == 7 ? customZoneMapX : na(packetX) ? "" : packetX.zoneMap
+        if matchingX and zoneTextX != ""
+            array<string> rowsX = str.split(zoneTextX, ";")
+            for rowX in rowsX
+                array<string> pX = str.split(rowX, ",")
+                if array.size(pX) == 11
+                    GGMapZone zX = GGMapZone.new(int(str.tonumber(array.get(pX, 0))), int(str.tonumber(array.get(pX, 1))), str.tonumber(array.get(pX, 2)), str.tonumber(array.get(pX, 3)), str.tonumber(array.get(pX, 4)), array.get(pX, 5), array.get(pX, 6), int(str.tonumber(array.get(pX, 7))), int(str.tonumber(array.get(pX, 8))), array.get(pX, 9), array.get(pX, 10) == "1", slotX == 7 ? timeframe.period : f_slot_name(slotX))
+                    array.push(mapZones, zX)
+                    bool usableX = zX.strong and zX.pending == 0 and not str.contains(zX.status, "UJI TEMBUS") and math.abs((zX.lo + zX.hi) / 2 - mapC) <= possibleReachATR * mapATR
+                    if usableX and zX.side == 1 and zX.hi < mapC and (na(possibleSupport) or zX.hi > possibleSupport)
+                        possibleSupport := zX.hi
+                        possibleBuyAnchor := zX.lo
+                        possibleSellWall := zX.hi
+                        possibleSupportKind := zX.name + " " + zX.tf
+                    if usableX and zX.side == -1 and zX.lo > mapC and (na(possibleResistance) or zX.lo < possibleResistance)
+                        possibleResistance := zX.lo
+                        possibleSellAnchor := zX.hi
+                        possibleBuyWall := zX.lo
+                        possibleResistanceKind := zX.name + " " + zX.tf
+    for zX in mapZones
+        if zX.strong and zX.pending == 0 and not str.contains(zX.status, "UJI TEMBUS")
+            if zX.side == 1 and not na(possibleSupport) and zX.lo <= possibleSupport and possibleSupport - zX.lo <= srClusterATR * mapATR
+                possibleBuyAnchor := math.min(possibleBuyAnchor, zX.lo)
+            if zX.side == -1 and not na(possibleResistance) and zX.hi >= possibleResistance and zX.hi - possibleResistance <= srClusterATR * mapATR
+                possibleSellAnchor := math.max(possibleSellAnchor, zX.hi)
+    array<int> pickedX = array.new<int>()
+    for slotX = 0 to 63
+        int bestX = -1
+        float bestRankX = -1e10
+        if showZones and slotX < strongZoneLimit and not na(mapATR) and mapATR > 0 and array.size(mapZones) > 0
+            for iX = 0 to array.size(mapZones) - 1
+                GGMapZone zX = array.get(mapZones, iX)
+                float distanceX = math.abs((zX.lo + zX.hi) / 2 - mapC) / mapATR
+                float rankX = zX.quality - 3.0 * distanceX
+                if (not strongOnlyZones or zX.strong) and not array.includes(pickedX, iX) and rankX > bestRankX
+                    bestX := iX
+                    bestRankX := rankX
+        box bxX = array.get(strongZoneBoxes, slotX)
+        if bestX < 0
+            box.delete(bxX)
+            array.set(strongZoneBoxes, slotX, na)
+        else
+            array.push(pickedX, bestX)
+            GGMapZone zX = array.get(mapZones, bestX)
+            bool sdX = zX.name == "SUPPLY" or zX.name == "DEMAND"
+            bool pendingX = zX.pending > 0 or str.contains(zX.status, "UJI TEMBUS")
+            color colX = pendingX ? color.orange : sdX ? (zX.side == 1 ? color.blue : color.purple) : zX.side == 1 ? color.teal : color.red
+            string txtX = zX.name + " | " + zX.tf + " | " + zX.status + (sdX ? "" : " | tes " + str.tostring(zX.tests)) + (zX.origin == "-" ? "" : " | " + zX.origin)
+            int rightX = time_close + int(timeframe.in_seconds() * 1000) * possibleBars
+            if na(bxX)
+                bxX := box.new(zX.born, zX.hi, rightX, zX.lo, xloc = xloc.bar_time, border_color = colX, bgcolor = color.new(colX, 93), text = txtX, text_color = colX, text_size = size.tiny)
+                array.set(strongZoneBoxes, slotX, bxX)
+            else
+                box.set_lefttop(bxX, zX.born, zX.hi)
+                box.set_rightbottom(bxX, rightX, zX.lo)
+                box.set_border_color(bxX, colX)
+                box.set_bgcolor(bxX, color.new(colX, 93))
+                box.set_text(bxX, txtX)
+                box.set_text_color(bxX, colX)
+            box.set_border_style(bxX, sdX ? line.style_dotted : pendingX or str.contains(zX.status, "LEMAH") ? line.style_dashed : line.style_solid)
+
+
+// Freeze historical rectangles at their endpoint instead of projecting them
+// to the right like active zones. Only the most recent closed intervals appear.
+var array<box> zoneHistoryBoxesX = array.new<box>(12, na)
+if barstate.islast
+    array<int> historyPickedX = array.new<int>()
+    for slotX = 0 to 11
+        int bestX = -1
+        if showZones and showZoneHistory and slotX < zoneHistoryLimit and array.size(chartZoneHistoryX) > 0
+            for iX = array.size(chartZoneHistoryX) - 1 to 0
+                GGZoneHistory rX = array.get(chartZoneHistoryX, iX)
+                if not rX.active and rX.last > rX.first and not array.includes(historyPickedX, iX)
+                    bestX := iX
+                    break
+        box bxX = array.get(zoneHistoryBoxesX, slotX)
+        if bestX < 0
+            box.delete(bxX)
+            array.set(zoneHistoryBoxesX, slotX, na)
+        else
+            array.push(historyPickedX, bestX)
+            GGZoneHistory rX = array.get(chartZoneHistoryX, bestX)
+            color colX = rX.side == 1 ? color.teal : color.red
+            string tfX = timeframe.isintraday ? "TF " + timeframe.period : timeframe.period
+            string txtX = rX.name + " | " + tfX + " | RIWAYAT"
+            if na(bxX)
+                bxX := box.new(rX.first, rX.hi, rX.last, rX.lo, xloc = xloc.bar_time, border_color = color.new(colX, 25), bgcolor = color.new(colX, 95), text = txtX, text_color = color.new(colX, 15), text_size = size.tiny, border_style = line.style_dashed)
+                array.set(zoneHistoryBoxesX, slotX, bxX)
+            else
+                box.set_lefttop(bxX, rX.first, rX.hi)
+                box.set_rightbottom(bxX, rX.last, rX.lo)
+                box.set_border_color(bxX, color.new(colX, 25))
+                box.set_bgcolor(bxX, color.new(colX, 95))
+                box.set_text_color(bxX, color.new(colX, 15))
+                box.set_text(bxX, txtX)
+
+
+float chartSecMap = timeframe.in_seconds()
+// Exact supported TF; otherwise explicitly show the closest lower native base.
+int mapSlot = chartSecMap < 900 ? 0 : chartSecMap < 1800 ? 1 : chartSecMap < 3600 ? 6 : chartSecMap < 14400 ? 2 : chartSecMap < 86400 ? 3 : chartSecMap < 604800 ? 4 : 5
+int mapHorizon = f_slot_hor(mapSlot)
+GGNativeState mapDetail = f_slot_detail(mapSlot)
+int mapTrend = na(mapDetail) ? 0 : mapDetail.bias
+int mapParent = chartSecMap < 900 ? nz(m15Bias, 0) : chartSecMap < 3600 ? nz(h1BiasMap, 0) : chartSecMap < 14400 ? nz(h4BiasMap, 0) : chartSecMap < 86400 ? nz(d1BiasMap, 0) : chartSecMap < 604800 ? nz(w1BiasMap, 0) : 0
+[mapMacro, mapMacroCount] = f_macro_at(mapHorizon, time_close[1])
+float possibleUpPct = f_forward_score(mapSlot)
+float possibleDownPct = na(possibleUpPct) ? na : 100.0 - possibleUpPct
+bool mapDataOK = not na(possibleUpPct) and not na(mapATR) and mapATR > 0
+bool mapChop = not na(possibleUpPct) and math.abs(possibleUpPct - 50) < 8
+
+
+[mapBuyValid, mapBuyE, mapBuySL, mapBuyTP, mapBuyRR] = f_map_plan(1, possibleSupport, possibleBuyAnchor, possibleBuyWall, mapATR, mapHorizon)
+[mapSellValid, mapSellE, mapSellSL, mapSellTP, mapSellRR] = f_map_plan(-1, possibleResistance, possibleSellAnchor, possibleSellWall, mapATR, mapHorizon)
+bool mapNewsBlocked = newsWindow and mapHorizon <= 2
+bool mapSessionBlocked = useSession and na(time(timeframe.period, sessionHours, tz))
+bool mapRollover = sessionFilter and mapHorizon == 1 and (hour(time_close, "America/New_York") == 17 or (hour(time_close, "America/New_York") == 16 and minute(time_close, "America/New_York") >= 45))
+bool mapBuyEligible = mapBuyValid and mapDataOK and mapTrend == 1 and (not htfVeto or mapParent != -1) and (not macroVeto or mapHorizon == 1 or mapMacro > -0.99) and not mapNewsBlocked and not mapSessionBlocked and not mapRollover and time_close[1] >= startTest
+bool mapSellEligible = mapSellValid and mapDataOK and mapTrend == -1 and (not htfVeto or mapParent != 1) and (not macroVeto or mapHorizon == 1 or mapMacro < 0.99) and not mapNewsBlocked and not mapSessionBlocked and not mapRollover and time_close[1] >= startTest
+
+// Gap drawing belongs to the host chart only. No cross-TF gap transport.
+type GGGap
+    int side
+    float lo
+    float hi
+    int born
+    int bornBar
+    string kind
+    bool partial = false
+
+f_add_gap(array<GGGap> gaps, int side, float lo, float hi, int born, int bornBar, string kind) =>
+    bool duplicate = false
+    for g in gaps
+        if g.side == side and g.kind == kind and lo <= g.hi and hi >= g.lo
+            duplicate := true
+            break
+    if not duplicate and not na(lo) and not na(hi) and hi - lo >= syminfo.mintick
+        array.push(gaps, GGGap.new(side, lo, hi, born, bornBar, kind))
+        if array.size(gaps) > gapLimit
+            array.shift(gaps)
+    0
+
+f_update_gaps(array<GGGap> gaps, int nowBar, float h, float l) =>
+    if array.size(gaps) > 0
+        for i = array.size(gaps) - 1 to 0
+            GGGap g = array.get(gaps, i)
+            bool later = nowBar > g.bornBar
+            bool full = later and (g.side == 1 ? l <= g.lo : h >= g.hi)
+            bool expired = nowBar - g.bornBar > gapLifeBars
+            if full or expired
+                array.remove(gaps, i)
+            else if later
+                if g.side == 1 and l < g.hi and l > g.lo
+                    g.hi := l
+                    g.partial := true
+                if g.side == -1 and h > g.lo and h < g.hi
+                    g.lo := h
+                    g.partial := true
+    0
+
+f_gap_candidates(float o, float h, float l, float priorClose, float a) =>
+    int openSide = not na(a) and math.abs(o - priorClose) >= gapMinATR * a ? (o > priorClose ? 1 : -1) : 0
+    float openLo = openSide == 1 ? priorClose : openSide == -1 ? math.max(o, h) : na
+    float openHi = openSide == 1 ? math.min(o, l) : openSide == -1 ? priorClose : na
+    [openSide, openLo, openHi]
+
+var array<GGGap> chartGaps = array.new<GGGap>()
+var array<box> gapBoxes = array.new<box>(20, na)
+int closedGapBarX = bar_index - 1
+f_update_gaps(chartGaps, closedGapBarX, high[1], low[1])
+[openGapSideX, openGapLoX, openGapHiX] = f_gap_candidates(open[1], high[1], low[1], close[2], atr[1])
+if showOpenGaps and openGapSideX != 0 and openGapHiX > openGapLoX
+    f_add_gap(chartGaps, openGapSideX, openGapLoX, openGapHiX, time_close[1], closedGapBarX, "GAP OPEN")
+if barstate.islast
+    for slotX = 0 to 19
+        box bxX = array.get(gapBoxes, slotX)
+        if slotX >= array.size(chartGaps)
+            box.delete(bxX)
+            array.set(gapBoxes, slotX, na)
+        else
+            GGGap gX = array.get(chartGaps, array.size(chartGaps) - 1 - slotX)
+            color gapColX = color.yellow
+            string captionX = gX.kind + (gX.side == 1 ? " UP" : " DOWN") + " | TF " + timeframe.period + (gX.partial ? " | PARTIAL" : " | OPEN")
+            int gapRightX = time_close + int(timeframe.in_seconds() * 1000) * possibleBars
+            if na(bxX)
+                bxX := box.new(gX.born, gX.hi, gapRightX, gX.lo, xloc = xloc.bar_time, border_color = color.new(gapColX, 35), bgcolor = color.new(gapColX, 94), text = captionX, text_color = gapColX, text_size = size.tiny, border_style = line.style_dotted)
+                array.set(gapBoxes, slotX, bxX)
+            else
+                box.set_lefttop(bxX, gX.born, gX.hi)
+                box.set_rightbottom(bxX, gapRightX, gX.lo)
+                box.set_text(bxX, captionX)
+                box.set_border_color(bxX, color.new(gapColX, 35))
+                box.set_text_color(bxX, gapColX)
+                box.set_bgcolor(bxX, color.new(gapColX, 94))
+
+
+// Fixed pools: 3 labels, 2 boxes, 6 lines. Update latest drawings in place.
+// They cannot evict historical signal labels or exceed future bar limits.
+var array<label> possibleLabels = array.new<label>(3, na)
+var array<box> possibleBoxes = array.new<box>(2, na)
+var array<line> possibleLines = array.new<line>(7, na)
+f_map_label(int slotX, int xX, float yX, string textX, color colX, string hintX) =>
+    label lbX = array.get(possibleLabels, slotX)
+    if na(lbX)
+        lbX := f_label(xX, yX, textX, locX = xloc.bar_index, styleX = label.style_label_left, colX = colX, sizeX = size.tiny, alignX = text.align_left, hintX = hintX)
+        array.set(possibleLabels, slotX, lbX)
+    else
+        label.set_xy(lbX, xX, yX)
+        label.set_text(lbX, textX)
+        label.set_color(lbX, colX)
+        label.set_tooltip(lbX, hintX)
+    0
+f_map_line(int slotX, int x1X, float y1X, int x2X, float y2X, color colX) =>
+    line lnX = array.get(possibleLines, slotX)
+    if na(lnX)
+        lnX := line.new(x1X, y1X, x2X, y2X, xloc = xloc.bar_index, color = colX, style = line.style_dashed, width = 1)
+        array.set(possibleLines, slotX, lnX)
+    else
+        line.set_xy1(lnX, x1X, y1X)
+        line.set_xy2(lnX, x2X, y2X)
+        line.set_color(lnX, colX)
+    0
+f_map_clear_side(int slotX) =>
+    label.delete(array.get(possibleLabels, slotX + 1))
+    box.delete(array.get(possibleBoxes, slotX))
+    array.set(possibleLabels, slotX + 1, na)
+    array.set(possibleBoxes, slotX, na)
+    for kX = slotX * 3 to slotX * 3 + 2
+        line.delete(array.get(possibleLines, kX))
+        array.set(possibleLines, kX, na)
+    0
+f_map_draw_side(int slotX, int sideX, float levelX, float slX, float tpX, float netX, bool validX, bool eligibleX, string levelKindX) =>
+    int x1X = bar_index + 2
+    int x2X = bar_index + possibleBars
+    float halfX = math.max(syminfo.mintick, possibleWidthATR * mapATR)
+    color sideColX = sideX == 1 ? color.rgb(0, 167, 128) : color.rgb(218, 71, 88)
+    color colX = eligibleX ? sideColX : color.rgb(95, 106, 126)
+    box bxX = array.get(possibleBoxes, slotX)
+    if na(bxX)
+        bxX := box.new(x1X, levelX + halfX, x2X, levelX - halfX, border_color = colX, bgcolor = color.new(sideColX, 82))
+        array.set(possibleBoxes, slotX, bxX)
+    else
+        box.set_lefttop(bxX, x1X, levelX + halfX)
+        box.set_rightbottom(bxX, x2X, levelX - halfX)
+        box.set_border_color(bxX, colX)
+        box.set_bgcolor(bxX, color.new(sideColX, 82))
+    string sideTextX = sideX == 1 ? "BUY" : "SELL"
+    string stageX = mapNewsBlocked ? "BLOK NEWS" : mapSessionBlocked or mapRollover ? "BLOK SESI" : not validX ? "RR KURANG" : not eligibleX ? "TUNGGU TREN" : "TUNGGU REJECTION"
+    string txtX = "POSSIBLE " + sideTextX + " • " + levelKindX + "\n" + f_price(f_round(levelX - halfX)) + "–" + f_price(f_round(levelX + halfX)) + "\n" + stageX
+    if validX
+        txtX += "\nE ~" + f_price(levelX) + " | SL " + f_price(slX) + "\nTP " + f_price(tpX) + " | net " + f_num(netX) + "R"
+    float labelY = sideX == 1 ? math.min(levelX, mapC - 0.90 * mapATR) : math.max(levelX, mapC + 0.90 * mapATR)
+    f_map_label(slotX + 1, x2X, labelY, txtX, color.new(colX, 8), "Skenario; RR net.")
+    int lineBaseX = slotX * 3
+    if showPossiblePaths
+        f_map_line(lineBaseX, bar_index, mapC, x1X, levelX, color.new(colX, 25))
+        if validX and eligibleX
+            f_map_line(lineBaseX + 1, x1X, levelX, x2X, tpX, color.new(sideColX, 15))
+            f_map_line(lineBaseX + 2, x1X, slX, x2X, slX, color.new(color.red, 40))
+        else
+            for kX = lineBaseX + 1 to lineBaseX + 2
+                line.delete(array.get(possibleLines, kX))
+                array.set(possibleLines, kX, na)
+    else
+        for kX = lineBaseX to lineBaseX + 2
+            line.delete(array.get(possibleLines, kX))
+            array.set(possibleLines, kX, na)
+    0
+if barstate.islast
+    if showPossibleMap and mapDataOK
+        string macroTextX = not useMacro ? "PROXY OFF" : mapMacroCount == 0 ? "PROXY KOSONG" : "PROXY " + (mapMacro > 0 ? "BULLISH" : mapMacro < 0 ? "BEARISH" : "CAMPURAN")
+        string manualTextX = f_manual_at(time_close[1]) == 0 ? "manual netral" : "manual " + fundamentalView
+        string biasTextX = "BIAS TEKNIKAL " + f_slot_name(mapSlot) + " • " + str.tostring(forecastBars) + " BAR KE DEPAN" + "\nNAIK " + str.tostring(possibleUpPct, "#") + " | TURUN " + str.tostring(possibleDownPct, "#") + (mapChop ? "\nBELUM DOMINAN" : "") + "\n" + macroTextX + " | " + manualTextX + "\nSkor bersyarat • news manual"
+        if showTFBias
+            biasTextX += "\nTF CANDLE TUTUP" + f_tf_bias_summary()
+        f_map_label(0, bar_index + possibleBars, mapC, biasTextX, color.new(color.rgb(31, 45, 68), 5), "Skor bersyarat. Makro proxy; news manual." + (fundamentalNote != "" and f_manual_at(time_close[1]) != 0 ? "\nBerita manual: " + fundamentalNote : ""))
+        if not na(possibleSupport) and (possibleBothSides or possibleUpPct >= 50)
+            f_map_draw_side(0, 1, mapBuyE, mapBuySL, mapBuyTP, mapBuyRR, mapBuyValid, mapBuyEligible, possibleSupportKind)
+        else
+            f_map_clear_side(0)
+        if not na(possibleResistance) and (possibleBothSides or possibleDownPct > 50)
+            f_map_draw_side(1, -1, mapSellE, mapSellSL, mapSellTP, mapSellRR, mapSellValid, mapSellEligible, possibleResistanceKind)
+        else
+            f_map_clear_side(1)
+    else
+        label.delete(array.get(possibleLabels, 0))
+        array.set(possibleLabels, 0, na)
+        f_map_clear_side(0)
+        f_map_clear_side(1)
+
+
+// v1.23.19: removed internal-only legacy SIM ledger (never rendered; canonical MTF engine unchanged).
+
+plot(showEMA ? ema20 : na, "EMA20", color = color.yellow)
+plot(showEMA ? ema50 : na, "EMA50", color = color.aqua)
+plot(showEMA ? ema200 : na, "EMA200", color = color.orange, linewidth = 2)
+plot(not strongOnlyZones ? support : na, "Support", color = color.new(color.teal, 25), style = plot.style_stepline)
+plot(not strongOnlyZones ? resistance : na, "Resistance", color = color.new(color.red, 25), style = plot.style_stepline)
+// v1.22.5: legacy SIM/audit Data Window plots removed.
+// They depended on the host chart timeframe and are not part of canonical MTF signaling.
+plotshape(showStructure and sweepUp, "Sweep naik", shape.triangleup, location.belowbar, color.aqua, size = size.tiny, text = "SW")
+plotshape(showStructure and sweepDown, "Sweep turun", shape.triangledown, location.abovebar, color.orange, size = size.tiny, text = "SW")
+var GGMarkerGate chartMarkerGateX = GGMarkerGate.new()
+int chartBreakMarkerX = f_break_marker(chartMarkerGateX, showBreakEvents, chartBrSideX, chartBrGradeX, chartBrLoX, chartBrHiX, atr[1], bar_index - 1)
+plotshape(chartBreakMarkerX == 1, "BREAK naik", shape.triangleup, location.belowbar, color.lime, size = size.tiny, text = "BREAK")
+plotshape(chartBreakMarkerX == -1, "BREAK turun", shape.triangledown, location.abovebar, color.fuchsia, size = size.tiny, text = "BREAK")
+bgcolor(newsWindow ? color.new(color.orange, 91) : na, title = "News manual window")
+// v1.22.6: legacy SIM alertconditions remain removed; only canonical MTF is user-facing.
+
+// v1.22.6: legacy floating SIM Entry/SL/TP tags remain removed.
+// Chart labels project the canonical MTF state.
+
+// v1.22.5: bottom-left SIM recap remains removed; legacy SIM visuals/alerts are also removed.
+
+// Entry alerts use a latched ledger verdict. Choose "Any alert() function call".
+var int alertedBornX = na
+for slotX = 0 to 6
+    if timeframe.in_seconds(array.get(nativePeriods, slotX)) == timeframe.in_seconds()
+        GGNativeState pX = f_slot_detail(slotX)
+        bool validAlertX = not na(pX) and pX.liveSide != 0 and pX.liveBorn == time and array.get(hostSkips, slotX) == 0 and not (scalpConflict and slotX < 2)
+        if enableAlerts and validAlertX and (na(alertedBornX) or pX.liveBorn != alertedBornX)
+            alert("GoldGuard " + f_slot_name(slotX) + (pX.liveSide == 1 ? " BUY " : " SELL ") + f_setup_name(pX.liveMethod) + " E=" + f_price(pX.liveEntry) + " SL=" + f_price(pX.liveSL) + " TP=" + f_price(pX.liveTP), alert.freq_once_per_bar)
+            alertedBornX := pX.liveBorn
+
+// Audit stream for TradingView chart CSV export. Events are never back-plotted.
+// One TF per export: open the actual M5/M15/M30/H1 chart before exporting.
+var int auditEntryBorn = na
+var int auditExitBorn = na
+float auditEB = na
+float auditSide = na
+float auditE = na
+float auditSL = na
+float auditTP = na
+float auditMethod = na
+float auditSkip = na
+float auditXB = na
+float auditXT = na
+float auditXP = na
+float auditXCode = na
+float auditScore = na
+int auditSlot = array.indexof(nativePeriods, timeframe.period)
+if auditSlot >= 0 and array.size(lgBorn) > 0 and barstate.isconfirmed
+    for auditI = array.size(lgBorn) - 1 to 0
+        if array.get(lgSlot, auditI) == auditSlot
+            int bornAudit = array.get(lgBorn, auditI)
+            if na(auditEntryBorn) or bornAudit > auditEntryBorn
+                auditEntryBorn := bornAudit
+                auditEB := bornAudit
+                auditSide := array.get(lgSide, auditI)
+                auditE := array.get(lgE, auditI)
+                auditSL := array.get(lgSL, auditI)
+                auditTP := array.get(lgTP, auditI)
+                auditMethod := array.get(lgMethod, auditI)
+                auditSkip := array.get(lgSkip, auditI)
+                auditScore := array.get(lgCtx, auditI)
+            if array.get(lgRes, auditI) != 0 and (na(auditExitBorn) or bornAudit > auditExitBorn)
+                auditExitBorn := bornAudit
+                auditXB := bornAudit
+                auditXT := array.get(lgEnd, auditI)
+                float auditRisk = math.abs(array.get(lgE, auditI) - array.get(lgSL, auditI))
+                auditXP := array.get(lgE, auditI) + array.get(lgSide, auditI) * (array.get(lgR, auditI) * auditRisk + costPrice)
+                string auditKind = array.get(lgKind, auditI)
+                auditXCode := auditKind == "SL" ? -1 : auditKind == "TP" ? 1 : auditKind == "TRAIL/BE" ? 5 : auditKind == "CUT LOSS" ? 6 : auditKind == "STALE" ? 3 : auditKind == "FAILED BREAK" ? 4 : 2
+plot(auditEB, "GG_ENTRY_TIME", display = display.data_window)
+plot(auditSide, "GG_SIDE", display = display.data_window)
+plot(auditE, "GG_ENTRY", display = display.data_window)
+plot(auditSL, "GG_INITIAL_SL", display = display.data_window)
+plot(auditTP, "GG_TP", display = display.data_window)
+plot(auditMethod, "GG_METHOD", display = display.data_window)
+plot(auditSkip, "GG_SKIP", display = display.data_window)
+plot(auditScore, "GG_SCORE", display = display.data_window)
+plot(auditXB, "GG_EXIT_BORN", display = display.data_window)
+plot(auditXT, "GG_EXIT_TIME", display = display.data_window)
+plot(auditXP, "GG_EXIT_PRICE", display = display.data_window)
+plot(auditXCode, "GG_EXIT_CODE", display = display.data_window)
+
+
+// ===== PERMANENT ON-CHART VALIDATION & TELEMETRY DASHBOARD (v2.0.0) =====
+// Statistics are accumulated in permanent variables since startTest and never change when visual history labels are capped or purged.
+var table statsTbl = na
+if barstate.islast and showStatsTable
+    string posStr = statsTablePos == " kiri_bawah" ? position.bottom_left : statsTablePos == " kanan_atas" ? position.top_right : position.bottom_right
+    if na(statsTbl)
+        statsTbl := table.new(posStr, 6, 10, bgcolor = color.new(color.rgb(18, 24, 38), 8), border_color = color.new(color.rgb(65, 82, 115), 35), border_width = 1)
+    float tpRateAll = permStats.totalClosed > 0 ? 100.0 * permStats.tpHits / permStats.totalClosed : 0.0
+    float profRateAll = permStats.totalClosed > 0 ? 100.0 * permStats.profExits / permStats.totalClosed : 0.0
+    float slRateAll = permStats.totalClosed > 0 ? 100.0 * permStats.slHits / permStats.totalClosed : 0.0
+    float cutRateAll = permStats.totalClosed > 0 ? 100.0 * permStats.cutHits / permStats.totalClosed : 0.0
+    float expAll = permStats.totalClosed > 0 ? permStats.cumR / permStats.totalClosed : 0.0
+    float pfAll = permStats.sumLossR > 0.001 ? permStats.sumWinR / permStats.sumLossR : permStats.sumWinR > 0 ? 99.9 : 0.0
+    table.cell(statsTbl, 0, 0, "GOLDGUARD v2.0 TELEMETRY", text_color = color.white, bgcolor = color.rgb(34, 52, 84), text_size = size.tiny)
+    table.cell(statsTbl, 1, 0, "N Closed", text_color = color.white, bgcolor = color.rgb(34, 52, 84), text_size = size.tiny)
+    table.cell(statsTbl, 2, 0, "TP Hit %", text_color = color.white, bgcolor = color.rgb(34, 52, 84), text_size = size.tiny)
+    table.cell(statsTbl, 3, 0, "Prof Exit %", text_color = color.white, bgcolor = color.rgb(34, 52, 84), text_size = size.tiny)
+    table.cell(statsTbl, 4, 0, "SL% | Cut%", text_color = color.white, bgcolor = color.rgb(34, 52, 84), text_size = size.tiny)
+    table.cell(statsTbl, 5, 0, "Exp(R) | PF | DD", text_color = color.white, bgcolor = color.rgb(34, 52, 84), text_size = size.tiny)
+
+    table.cell(statsTbl, 0, 1, "ALL MTF (Permanen)", text_color = color.yellow, text_size = size.tiny)
+    table.cell(statsTbl, 1, 1, str.tostring(permStats.totalClosed), text_color = color.white, text_size = size.tiny)
+    table.cell(statsTbl, 2, 1, f_num(tpRateAll) + "%", text_color = tpRateAll >= 70 ? color.lime : color.aqua, text_size = size.tiny)
+    table.cell(statsTbl, 3, 1, f_num(profRateAll) + "%", text_color = color.lime, text_size = size.tiny)
+    table.cell(statsTbl, 4, 1, f_num(slRateAll) + "% | " + f_num(cutRateAll) + "%", text_color = color.white, text_size = size.tiny)
+    table.cell(statsTbl, 5, 1, f_signed_r(expAll) + " | PF " + f_num(pfAll) + " | DD " + f_num(permStats.maxDdR) + "R (Strk " + str.tostring(permStats.maxLossStreak) + ")", text_color = expAll > 0 ? color.lime : color.red, text_size = size.tiny)
+
+    array<int> displaySlots = array.from(0, 1, 6, 2, 3, 4, 5)
+    for rIdx = 0 to 6
+        int sSlot = array.get(displaySlots, rIdx)
+        int nTf = array.get(permTfTotal, sSlot)
+        float tpTf = nTf > 0 ? 100.0 * array.get(permTfTp, sSlot) / nTf : 0.0
+        float prTf = nTf > 0 ? 100.0 * array.get(permTfProf, sSlot) / nTf : 0.0
+        float exTf = nTf > 0 ? array.get(permTfNetR, sSlot) / nTf : 0.0
+        int rowT = rIdx + 2
+        table.cell(statsTbl, 0, rowT, f_slot_name(sSlot), text_color = color.white, text_size = size.tiny)
+        table.cell(statsTbl, 1, rowT, str.tostring(nTf), text_color = color.white, text_size = size.tiny)
+        table.cell(statsTbl, 2, rowT, nTf > 0 ? f_num(tpTf) + "%" : "-", text_color = tpTf >= 70 ? color.lime : color.white, text_size = size.tiny)
+        table.cell(statsTbl, 3, rowT, nTf > 0 ? f_num(prTf) + "%" : "-", text_color = color.white, text_size = size.tiny)
+        table.cell(statsTbl, 4, rowT, nTf > 0 ? "Aktif" : "-", text_color = color.gray, text_size = size.tiny)
+        table.cell(statsTbl, 5, rowT, nTf > 0 ? f_signed_r(exTf) + " (Total " + f_signed_r(array.get(permTfNetR, sSlot)) + ")" : "-", text_color = exTf >= 0 ? color.lime : color.orange, text_size = size.tiny)

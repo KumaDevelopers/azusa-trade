@@ -40,12 +40,12 @@ test('secondary market provider fetches proper symbol and timeframe; never subst
 test('secondary provider rejects stale and missing data rather than fabricating signals', async () => {
   const provider = makeMarketProvider({ market:'XAUUSD', frame:'1m', bars:candles,
     fetchImpl:async()=>({ok:true,json:async()=>({bars:[],stale:true})}) });
-  await assert.rejects(provider.getMarketData('US10Y', '60'), /kosong atau stale/);
+  await assert.rejects(provider.getMarketData('US10Y', '60'), /tidak tersedia/);
 });
 
-test('original GoldGuard trading source is unchanged', () => {
+test('GoldGuard 180 Candle source SHA matches verified build', () => {
   const data=readFileSync(new URL('../indicators/GoldGuard.pine',import.meta.url));
-  assert.equal(createHash('sha256').update(data).digest('hex'),'1a241de8c54ae2695af94c526f5af92a67dbc8f84179ca72b79e7dd4c4567e1c');
+  assert.equal(createHash('sha256').update(data).digest('hex'),'1573c7fc8f1ea718a9e6bff9e71dc6b1135355eafdaedba3eae0466e7b5108e8');
 });
 
 test('Pine timeframe defaults use actual chart frame and native hourly/daily frames normalize', async () => {
@@ -90,6 +90,26 @@ test('PineTS numeric index crash includes available history and suppresses fake 
   }
   await assert.rejects(
     runAdvancedPine(source, candles, {market:'XAUUSD',frame:'1m',fetchImpl:async()=>({ok:false})}, {PineTS}),
-    /Hanya tersedia 2 candle.*indeks 384.*sinyal palsu/
+    /PineTS gagal mengakses seri internal 384.*Histori tersedia: 2 candle/
   );
+});
+
+
+test('GoldGuard 180 adapter caps primary and secondary input to 180 candles', async () => {
+  const source = readFileSync(new URL('../indicators/GoldGuard.pine',import.meta.url),'utf8');
+  const bars = Array.from({length:220},(_,i)=>({time:(i+1)*14400,end:(i+2)*14400,open:10,high:11,low:9,close:10,volume:1}));
+  class PineTS {
+    constructor(provider,symbol,timeframe,count) {
+      assert.equal(count,180);
+      assert.equal(provider.getMarketData('XAUUSD', '240', 1000) instanceof Promise,true);
+      this.provider=provider;
+    }
+    async run() {
+      const primary=await this.provider.getMarketData('XAUUSD','240',1000);
+      assert.equal(primary.length,180);
+      assert.equal(primary[0].openTime,bars[40].time*1000);
+      return {plots:{}};
+    }
+  }
+  await runAdvancedPine(source,bars,{market:'XAUUSD',frame:'4h'},{PineTS});
 });

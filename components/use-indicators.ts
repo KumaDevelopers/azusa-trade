@@ -108,8 +108,16 @@ export function useIndicators(configs: Indicator[], scripts: Script[], bars: Bar
           store.delete(id);
           setStats(previous => ({ ...previous, [id]: { error } }));
         }
-        timers.set(id, setTimeout(() => fail("Indikator melampaui batas waktu eksekusi atau data MTF belum tersedia."),
-          script?.language === "pine" && /\b(?:request\.|array\.|type\s+)/.test(script.source) ? 20_000 : 2200));
+        // The actual GoldGuard 180 PineTS full-context run took ~32 seconds on
+        // Windows. Its previous 20-second worker deadline killed it even when
+        // the script-slicing bug had been bypassed. Keep it in a dedicated
+        // Worker, with a bounded 90-second timeout and no manufactured output.
+        const goldGuard180 = script?.language === "pine"
+          && /indicator\(["']GoldGuard v2\.0\.0 Stable Reload/.test(script.source)
+          && /\bcalc_bars_count\s*=\s*180\b/.test(script.source);
+        const budgetMs = goldGuard180 ? 90_000
+          : script?.language === "pine" && /\b(?:request\.|array\.|type\s+)/.test(script.source) ? 20_000 : 2200;
+        timers.set(id, setTimeout(() => fail("Indikator melampaui batas waktu eksekusi atau data MTF belum tersedia."), budgetMs));
         worker.postMessage({ id, config, market: market.id, frame: separate ? config.frame : frame, bars: input, target: separate ? chartBars : null, script,
           reset: !prior || input[0]?.time !== prior.target?.[0]?.time || input.at(-1)?.time !== prior.target?.at(-1)?.time });
       } catch (error) {
