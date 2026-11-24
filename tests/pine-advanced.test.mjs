@@ -63,3 +63,33 @@ test('Pine timeframe defaults use actual chart frame and native hourly/daily fra
   const provider = makeMarketProvider({market:'XAUUSD',frame:'15m',bars:candles});
   assert.equal((await provider.getMarketData('XAUUSD', '')).length, 2);
 });
+
+test('Pine provider backfills older REAL candles without inventing history', async () => {
+  const fresh = [
+    { time: 600, end: 660, open: 10, high: 11, low: 9, close: 10, volume: 2 },
+    { time: 660, end: 720, open: 11, high: 12, low: 10, close: 11, volume: 2 },
+  ];
+  let requests = 0;
+  const older = [360, 420, 480, 540].map(time => ({ time, end: time + 60, open: 9, high: 10, low: 8, close: 9, volume: 2 }));
+  const provider = makeMarketProvider({market:'EURUSD',frame:'1m',bars:fresh, fetchImpl: async url => {
+    requests++;
+    assert.match(url, /symbol=EURUSD/);
+    assert.match(url, /before=600/);
+    return {ok:true,json:async()=>({bars:older,stale:false})};
+  }});
+  assert.equal(await provider.primePrimary(6), 6);
+  const received = await provider.getMarketData('EURUSD', '1', 6);
+  assert.deepEqual(received.map(bar => bar.openTime), [360000, 420000, 480000, 540000, 600000, 660000]);
+  assert.equal(requests, 1);
+});
+
+test('PineTS numeric index crash includes available history and suppresses fake signals', async () => {
+  const source = '//@version=6\nindicator("Deep", calc_bars_count = 600)\nplot(close)';
+  class PineTS {
+    async run() { throw new TypeError("Cannot read properties of undefined (reading '384')"); }
+  }
+  await assert.rejects(
+    runAdvancedPine(source, candles, {market:'XAUUSD',frame:'1m',fetchImpl:async()=>({ok:false})}, {PineTS}),
+    /Hanya tersedia 2 candle.*indeks 384.*sinyal palsu/
+  );
+});

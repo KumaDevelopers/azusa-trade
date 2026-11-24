@@ -12,8 +12,13 @@ if errorlevel 1 (
   echo [GAGAL] Git pull gagal. Periksa konflik terlebih dahulu.
   exit /b 1
 )
-echo [CHECK] Install dependency dari package-lock.json...
+echo [CHECK] Sinkronkan package-lock.json lalu install dependency...
 cd /d "%~dp0"
+call npm install --package-lock-only --ignore-scripts --no-audit --no-fund
+if errorlevel 1 (
+  echo [GAGAL] package-lock.json gagal diperbarui.
+  exit /b 1
+)
 call npm ci --no-audit --no-fund
 if errorlevel 1 (
   echo [GAGAL] Dependency tidak berhasil di-install.
@@ -28,7 +33,10 @@ if errorlevel 1 exit /b 1
 call npm run build
 if errorlevel 1 exit /b 1
 echo [2/4] Salin source terbaru dengan Robocopy...
-robocopy "%~dp0" "%TARGET%" /E /R:2 /W:2 /XD .git node_modules .next .vercel dist build /XF .env .env.local .env.production .env.development
+rem %%~dp0 ends with a backslash; remove it before quoting for Robocopy.
+set "SOURCE=%~dp0"
+if "%SOURCE:~-1%"=="\" set "SOURCE=%SOURCE:~0,-1%"
+robocopy "%SOURCE%" "%TARGET%" /E /R:2 /W:2 /XD .git node_modules .next .vercel dist build /XF .env .env.local .env.production .env.development
 if errorlevel 8 (
   echo [GAGAL] Robocopy mengalami error.
   exit /b 1
@@ -44,7 +52,7 @@ if not errorlevel 1 (
   echo Tidak ada perubahan baru yang perlu di-push.
   exit /b 0
 )
-git -C "%TARGET%" commit -m "Fix Pine timeframe and add indicator drawing controls"
+git -C "%TARGET%" commit -m "Improve Pine history diagnostics and drawing editor"
 if errorlevel 1 exit /b 1
 echo [4/4] Push ke origin main...
 git -C "%TARGET%" push origin main

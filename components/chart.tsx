@@ -2,6 +2,7 @@
 
 import { forwardRef, memo, useEffect, useImperativeHandle, useRef, useState } from "react";
 import type { PointerEvent as ReactPointerEvent } from "react";
+import { EyeOff, Pencil, Trash2, X } from "lucide-react";
 import { AreaSeries, BarSeries, CandlestickSeries, ColorType, CrosshairMode, HistogramSeries, LineSeries, LineStyle, createChart } from "lightweight-charts";
 import type { Coordinate, IChartApi, ISeriesApi, LogicalRange, SeriesType, Time, UTCTimestamp } from "lightweight-charts";
 import type { Bar, DrawPoint, Drawing, Market, RenderedIndicator, Tool } from "../lib/types";
@@ -30,6 +31,9 @@ export default memo(forwardRef<ChartApi, ChartProps>(function Chart(props, ref) 
   const [pointer, setPointer] = useState<Coordinates | null>(null);
   const [dragStart, setDragStart] = useState<DrawPoint | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editPreview, setEditPreview] = useState<{ id: string; points: DrawPoint[] } | null>(null);
+  const editGesture = useRef<{ id: string; index: number; pointerId: number } | null>(null);
   const gesture = useRef<{ start: DrawPoint; x: number; y: number; pointerId: number } | null>(null);
   const api = useRef<IChartApi | null>(null);
   const main = useRef<ISeriesApi<SeriesType> | null>(null);
@@ -201,7 +205,29 @@ export default memo(forwardRef<ChartApi, ChartProps>(function Chart(props, ref) 
     }
   }, [indicators, scene, paneSignature, period]);
 
-  useEffect(() => { setPending(null); setPointer(null); setDragStart(null); gesture.current = null; setSelectedId(null); }, [tool, scene]);
+  useEffect(() => {
+    setPending(null); setPointer(null); setDragStart(null);
+    gesture.current = null; editGesture.current = null;
+    setSelectedId(null); setEditingId(null); setEditPreview(null);
+  }, [tool, scene]);
+
+  // Delete/Backspace only affect a selected drawing, never an input or code editor.
+  useEffect(() => {
+    if (!selectedId || tool !== "cursor") return;
+    const onKey = (event: KeyboardEvent) => {
+      const element = event.target as HTMLElement | null;
+      if (element?.closest('input,textarea,select,[contenteditable="true"], [role="textbox"]')) return;
+      if (event.key === "Delete" || event.key === "Backspace") {
+        event.preventDefault();
+        latest.current.onChangeDrawing(selectedId, null);
+        setSelectedId(null); setEditingId(null); setEditPreview(null);
+      } else if (event.key === "Escape") {
+        setSelectedId(null); setEditingId(null); setEditPreview(null);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [selectedId, tool]);
   function position(point: DrawPoint): Coordinates | null {
     const chart = api.current;
     const series = main.current;
@@ -255,8 +281,40 @@ export default memo(forwardRef<ChartApi, ChartProps>(function Chart(props, ref) 
     setPointer(coords);
   }
   function moveDrawing(event: ReactPointerEvent<SVGSVGElement>) {
-    if (tool === "cursor") return;
-    setPointer(pointerCoordinates(event));
+    const coords = pointerCoordinates(event);
+    if (editGesture.current) {
+      if (event.pointerId !== editGesture.current.pointerId) return;
+      const point = chartPoint(coords);
+      const drawing = latest.current.drawings.find(item => item.id === editGesture.current?.id);
+      if (point && drawing) {
+        const points = [...(editPreview?.id === drawing.id ? editPreview.points : drawing.points)];
+        points[editGesture.current.index] = point;
+        setEditPreview({ id: drawing.id, points });
+      }
+      return;
+    }
+    if (tool !== "cursor") setPointer(coords);
+  }
+  function beginEdit(event: ReactPointerEvent<SVGCircleElement>, id: string, index: number) {
+    if (tool !== "cursor" || editingId !== id) return;
+    event.stopPropagation(); event.preventDefault();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    editGesture.current = { id, index, pointerId: event.pointerId };
+  }
+  function finishEdit(event: ReactPointerEvent<SVGSVGElement>) {
+    const active = editGesture.current;
+    if (!active || active.pointerId !== event.pointerId) return false;
+    const coords = pointerCoordinates(event);
+    const point = chartPoint(coords);
+    const drawing = latest.current.drawings.find(item => item.id === active.id);
+    if (point && drawing) {
+      const points = [...(editPreview?.id === drawing.id ? editPreview.points : drawing.points)];
+      points[active.index] = point;
+      latest.current.onChangeDrawing(active.id, { points });
+    }
+    editGesture.current = null;
+    setEditPreview(null);
+    return true;
   }
   function endDrawing(event: ReactPointerEvent<SVGSVGElement>) {
     const active = gesture.current;
@@ -339,6 +397,7 @@ export default memo(forwardRef<ChartApi, ChartProps>(function Chart(props, ref) 
       if (tool !== "cursor") return;
       event.stopPropagation();
       event.preventDefault();
+      if (selectedId !== drawing.id) setEditingId(null);
       setSelectedId(drawing.id);
     }}>
       {shape}
@@ -346,18 +405,52 @@ export default memo(forwardRef<ChartApi, ChartProps>(function Chart(props, ref) 
     </g>;
   }
   const selected = drawings.find(item => item.id === selectedId && item.visible !== false);
-  const draft = pending ? position(pending) : dragStart ? position(dragStart) : null;
+  const activeSelected = selected && editPreview?.id === selected.id ? { ...selected, points: editPreview.points } : selected;
+  const previewAnchor = pending ?? dragStart;
+  const previewPoint = pointer && tool !== "cursor" ? chartPoint(pointer) : null;
+  const onePoint = tool === "horizontal" || tool === "vertical";
+  const previewDrawing: Drawing | null = tool !== "cursor" && (onePoint ? (previewPoint || previewAnchor) : previewAnchor) ? {
+    id: "__draft__", type: tool,
+    points: onePoint ? [previewPoint ?? previewAnchor!] :
+      previewAnchor && previewPoint ? [previewAnchor, previewPoint] : [previewAnchor!],
+  } : null;
+  const selectedCoordinates = activeSelected?.points.map(position).filter((point): point is Coordinates => point !== null) ?? [];
+  const anchorX = selectedCoordinates.length ? selectedCoordinates.reduce((sum, point) => sum + point.x, 0) / selectedCoordinates.length : 0;
+  const anchorY = selectedCoordinates.length ? Math.min(...selectedCoordinates.map(point => point.y)) : 0;
+  const width = canvas.current?.clientWidth ?? 800;
+  const height = canvas.current?.clientHeight ?? 400;
+  const toolbar = {
+    left: Math.max(82, Math.min(width - 82, anchorX)),
+    top: Math.min(height - 52, Math.max(10, anchorY >= 55 ? anchorY - 46 : anchorY + 18)),
+  };
   return <div className={"chart-frame draw-" + tool} data-repaint={layout}>
     <div ref={canvas} className="chart-canvas" aria-label={"Chart " + market.name}/>
-    {(tool !== "cursor" || drawings.some(item => item.visible !== false)) && <svg className={"chart-drawings" + (tool !== "cursor" ? " drawing-mode" : "")} aria-label="Drawing pada chart" onPointerDown={beginDrawing} onPointerMove={moveDrawing} onPointerUp={endDrawing} onPointerCancel={() => { gesture.current = null; setDragStart(null); }}>
-      {drawings.map(visual)}
-      {draft && <><circle cx={draft.x} cy={draft.y} r="4" fill="#8cc3ff"/>{pointer && <line x1={draft.x} y1={draft.y} x2={pointer.x} y2={pointer.y} stroke="#8cc3ff" strokeDasharray="4 4"/>}</>}
+    {(tool !== "cursor" || drawings.some(item => item.visible !== false)) && <svg
+      className={"chart-drawings" + (tool !== "cursor" ? " drawing-mode" : "")}
+      aria-label="Drawing pada chart"
+      onPointerDown={beginDrawing}
+      onPointerMove={moveDrawing}
+      onPointerUp={event => { if (!finishEdit(event)) endDrawing(event); }}
+      onPointerCancel={() => { gesture.current = null; editGesture.current = null; setEditPreview(null); setDragStart(null); }}>
+      {drawings.map(item => visual(editPreview?.id === item.id ? { ...item, points: editPreview.points } : item))}
+      {previewDrawing && <g className="drawing-preview" pointerEvents="none">{visual(previewDrawing)}</g>}
+      {editingId && activeSelected?.id === editingId && activeSelected.points.map((point, index) => {
+        const coordinate = position(point);
+        return coordinate && <circle key={index} className="drawing-edit-handle" cx={coordinate.x} cy={coordinate.y} r="6.5"
+          onPointerDown={event => beginEdit(event, activeSelected.id, index)}
+          aria-label={"Geser titik " + (index + 1)} />;
+      })}
     </svg>}
-    {selected && tool === "cursor" && <div className="drawing-selection-menu" role="group" aria-label="Pengaturan drawing terpilih">
-      <span>{selected.type}</span>
-      <button onClick={() => { props.onChangeDrawing(selected.id, { visible: false }); setSelectedId(null); }} aria-label="Sembunyikan drawing">Sembunyikan</button>
-      <button className="danger" onClick={() => { props.onChangeDrawing(selected.id, null); setSelectedId(null); }} aria-label="Hapus drawing">Hapus</button>
-      <button onClick={() => setSelectedId(null)} aria-label="Batalkan seleksi">×</button>
+    {selected && tool === "cursor" && <div className="drawing-selection-menu" style={toolbar} role="toolbar" aria-label="Pengaturan drawing terpilih">
+      <button type="button" className={editingId === selected.id ? "active" : ""} title="Edit drawing: geser titik biru" aria-label="Edit posisi drawing"
+        onClick={() => { setEditingId(value => value === selected.id ? null : selected.id); setEditPreview(null); }}><Pencil size={16}/></button>
+      <button type="button" title="Sembunyikan drawing" aria-label="Sembunyikan drawing" onClick={() => {
+        latest.current.onChangeDrawing(selected.id, { visible: false }); setSelectedId(null); setEditingId(null);
+      }}><EyeOff size={16}/></button>
+      <button type="button" className="danger" title="Hapus drawing (Delete)" aria-label="Hapus drawing" onClick={() => {
+        latest.current.onChangeDrawing(selected.id, null); setSelectedId(null); setEditingId(null);
+      }}><Trash2 size={16}/></button>
+      <button type="button" title="Tutup toolbar" aria-label="Batalkan seleksi" onClick={() => { setSelectedId(null); setEditingId(null); }}><X size={16}/></button>
     </div>}
   </div>;
 }));

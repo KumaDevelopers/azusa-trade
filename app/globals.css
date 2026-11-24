@@ -451,11 +451,14 @@ label input, label select, label textarea { width: 100%; }
 .chart-drawings .drawing-selectable, .chart-drawings .drawing-selected { pointer-events: none; }
 .chart-drawings .drawing-selectable [pointer-events], .chart-drawings .drawing-selected [pointer-events] { pointer-events: all; cursor: pointer; }
 .chart-drawings .drawing-selected [pointer-events] { cursor: pointer; }
-.drawing-selection-menu { position: absolute; z-index: 6; right: 84px; top: 58px; display: flex; align-items: center; flex-wrap: wrap; gap: 5px; background: var(--raised); border: 1px solid var(--border); border-radius: 8px; padding: 5px 7px; box-shadow: 0 9px 24px #0004; }
-.drawing-selection-menu span { color: var(--muted); font-size: .72rem; text-transform: capitalize; margin-right: 4px; }
-.drawing-selection-menu button { padding: 4px 7px; background: var(--hover); border-radius: 4px; font-size: .72rem; }
-.drawing-selection-menu button:hover { color: var(--accent); }
-.drawing-selection-menu button.danger:hover { color: var(--negative); }
+/* Floating icon toolbar follows the selected shape, not a fixed chart corner. */
+.drawing-preview { opacity: .92; }
+.drawing-preview line, .drawing-preview rect { stroke-dasharray: 5 3; stroke-width: 2px; }
+.chart-drawings .drawing-edit-handle { pointer-events: all; cursor: move; touch-action: none; fill: #76d6ff; stroke: #111721; stroke-width: 2.5px; }
+.drawing-selection-menu { position: absolute; z-index: 6; transform: translateX(-50%); display: flex; gap: 3px; align-items: center; padding: 5px; border-radius: 9px; border: 1px solid var(--border); background: var(--raised); box-shadow: 0 10px 25px #0008; white-space: nowrap; pointer-events: auto; }
+.drawing-selection-menu button { width: 30px; height: 30px; display: inline-grid; place-items: center; border-radius: 6px; color: var(--muted); }
+.drawing-selection-menu button:hover, .drawing-selection-menu button.active { color: var(--accent); background: var(--hover); }
+.drawing-selection-menu button.danger:hover { color: var(--negative); background: var(--hover); }
 .plot-labels { pointer-events: auto; }
 .plot-chip { display: inline-flex; align-items: center; min-width: 0; gap: 5px; border-radius: 5px; padding: 2px 4px; background: color-mix(in srgb, var(--raised) 65%, transparent); }
 .plot-chip.muted { opacity: .55; }
