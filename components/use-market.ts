@@ -22,7 +22,7 @@ async function fetchJSON(url: string, signal?: AbortSignal) {
   const response = await fetch(url, { signal: signal ? AbortSignal.any([signal, timeout]) : timeout, cache: "no-store" });
   if (response.headers.get("content-type")?.includes("json")) {
     const data = await response.json();
-    if (!response.ok) throw new Error(data.error || "HTTP " + response.status);
+    if (!response.ok) throw Object.assign(new Error(data.error || "HTTP " + response.status), { code: data.code });
     return data;
   }
   throw new Error("Feed tidak dapat dihubungi.");
@@ -131,7 +131,7 @@ export function useMarket(market: Market, frame: string, provider: string, enabl
         });
       }).catch(error => {
         if (signal.aborted) return;
-        if (market.category !== "Crypto" && /Hubungkan Twelve Data/.test(error.message)) status("setup", error.message);
+        if (["TWELVE_DATA_KEY_REQUIRED", "TWELVE_DATA_INVALID_KEY", "TWELVE_DATA_ACCESS_DENIED"].includes(error.code)) status("setup", error.message);
         else if (!(lastEvent && Date.now() - lastEvent < 25000)) status("disconnected", error.message);
       }).finally(() => { requested = null; });
       return requested;

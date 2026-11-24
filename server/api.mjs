@@ -31,14 +31,14 @@ export async function cached(key, ttl, get) {
   return inFlight.get(key);
 }
 
-async function upstream(url, parse = "json") {
+async function upstream(url, parse = "json", providerError) {
   let response;
   try {
     response = await fetch(url, { headers: { "user-agent": userAgent }, signal: AbortSignal.timeout(7000) });
   } catch {
     throw new Error("Sumber data tidak dapat dihubungi.");
   }
-  if (!response.ok) throw new Error("Sumber data mengembalikan HTTP " + response.status + ".");
+  if (!response.ok) throw (providerError?.(response.status) ?? new Error("Sumber data mengembalikan HTTP " + response.status + "."));
   return response[parse]();
 }
 
@@ -72,11 +72,21 @@ async function okxHistory(market, frame, limit, before) {
   return { source: "OKX Spot", bars: span === 1 ? bars : aggregateBars(bars, frame) };
 }
 
+const providerIssue = (code, status, message) => Object.assign(new Error(message), { providerCode: code, status });
+
+function twelveDataError(status) {
+  switch (Number(status)) {
+    case 401: return providerIssue("TWELVE_DATA_INVALID_KEY", 424, "API key Twelve Data ditolak. Periksa key di Vercel, lalu redeploy.");
+    case 403: return providerIssue("TWELVE_DATA_ACCESS_DENIED", 424, "Paket Twelve Data tidak memberi akses ke simbol atau interval ini.");
+    case 429: return providerIssue("TWELVE_DATA_RATE_LIMIT", 429, "Kuota Twelve Data tercapai. Coba lagi setelah kuota tersedia.");
+    default: return providerIssue("TWELVE_DATA_UNAVAILABLE", 502, "Data Twelve Data belum tersedia untuk simbol dan interval ini.");
+  }
+}
+
 async function twelveHistory(market, frame, limit, before, env) {
-  if (!env.TWELVE_DATA_API_KEY) {
-    const error = new Error("Hubungkan Twelve Data untuk membuka riwayat Forex, Metals, atau DXY.");
-    error.status = 424;
-    throw error;
+  const apiKey = env.TWELVE_DATA_API_KEY?.trim();
+  if (!apiKey) {
+    throw providerIssue("TWELVE_DATA_KEY_REQUIRED", 424, "Tambahkan TWELVE_DATA_API_KEY di Vercel, lalu redeploy.");
   }
   const native = twelveFrames[frame];
   const nativeSeconds = { "1min": 60, "5min": 300, "15min": 900, "30min": 1800, "1h": 3600, "2h": 7200, "4h": 14400, "8h": 28800, "1day": 86400, "1week": 604800, "1month": 2592000 }[native];
@@ -84,14 +94,12 @@ async function twelveHistory(market, frame, limit, before, env) {
   const span = frames[frame] / nativeSeconds;
   const symbol = market.id === "DXY" ? (env.TWELVE_DATA_DXY_SYMBOL || "DXY") : feedSymbol(market);
   const query = new URLSearchParams({
-    symbol, interval: native, apikey: env.TWELVE_DATA_API_KEY,
+    symbol, interval: native, apikey: apiKey,
     outputsize: String(Math.min(5000, Math.ceil(limit * span))), timezone: "UTC", order: "ASC",
     ...(before ? { end_date: new Date((before - 1) * 1000).toISOString().slice(0, 19).replace("T", " ") } : {}),
   });
-  const data = await upstream(TD + "/time_series?" + query);
-  if (data.status === "error" || !Array.isArray(data.values)) {
-    throw new Error("Twelve Data tidak menyediakan data ini. Periksa cakupan simbol, kuota, dan paket.");
-  }
+  const data = await upstream(TD + "/time_series?" + query, "json", twelveDataError);
+  if (data?.status === "error" || !Array.isArray(data?.values)) throw twelveDataError(data?.code);
   const bars = data.values.map(row => {
     const time = Date.parse(row.datetime.replace(" ", "T") + (row.datetime.includes(":") ? "Z" : "T00:00:00Z")) / 1000;
     const end = frame === "1M" ? Date.UTC(new Date(time * 1000).getUTCFullYear(), new Date(time * 1000).getUTCMonth() + 1, 1) / 1000 : time + nativeSeconds;
@@ -202,7 +210,7 @@ async function calendar(env) {
 }
 
 function streamUrl(env) {
-  if (!env.TWELVE_DATA_API_KEY || Number(env.TWELVE_DATA_DELAY_SECONDS || 0)) return null;
+  if (!env.TWELVE_DATA_API_KEY?.trim() || Number(env.TWELVE_DATA_DELAY_SECONDS || 0)) return null;
   try {
     const url = new URL(env.TWELVE_STREAM_URL);
     if (url.protocol === "https:" || (!env.VERCEL && url.protocol === "http:" && url.hostname === "localhost")) {
@@ -232,7 +240,7 @@ export async function apiFetch(request, env = {}) {
   if (request.method !== "GET") return json({ error: "Metode tidak didukung." }, 405);
   try {
     if (url.pathname === "/api/config") return json({
-      forex: Boolean(env.TWELVE_DATA_API_KEY), forexStream: streamUrl(env),
+      forex: Boolean(env.TWELVE_DATA_API_KEY?.trim()), forexStream: streamUrl(env),
       economicCalendar: env.TRADING_ECONOMICS_API_KEY ? "Trading Economics" : "BLS / Federal Reserve",
     });
     if (url.pathname === "/api/history") {
@@ -286,6 +294,6 @@ export async function apiFetch(request, env = {}) {
     }
     return json({ error: "Endpoint tidak tersedia." }, 404);
   } catch (error) {
-    return json({ error: error.message || "Sumber data sedang tidak tersedia." }, error.status || 502);
+    return json({ error: error.message || "Sumber data sedang tidak tersedia.", ...(error.providerCode ? { code: error.providerCode } : {}) }, error.status || 502);
   }
 }

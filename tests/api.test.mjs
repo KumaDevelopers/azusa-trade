@@ -8,11 +8,46 @@ test("HTTP API validates routes and reports missing credentials", async () => {
   assert.equal(await apiFetch(request("/")), null);
   assert.equal((await apiFetch(request("/api/history?symbol=__proto__&frame=15m"))).status, 400);
   assert.equal((await apiFetch(request("/api/history?symbol=BTCUSDT&frame=__proto__"))).status, 400);
-  assert.equal((await apiFetch(request("/api/history?symbol=XAUUSD&frame=15m"))).status, 424);
+  const missingKey = await apiFetch(request("/api/history?symbol=XAUUSD&frame=15m"));
+  assert.equal(missingKey.status, 424);
+  assert.equal((await missingKey.json()).code, "TWELVE_DATA_KEY_REQUIRED");
   assert.equal((await apiFetch(request("/api/history?symbol=US10Y&frame=15m"))).status, 400);
   assert.equal((await apiFetch(request("/api/config", { method: "POST" }))).status, 405);
   assert.deepEqual(await (await apiFetch(request("/api/config"))).json(), { forex: false, forexStream: null, economicCalendar: "BLS / Federal Reserve" });
 });
+test("Twelve Data reports key, entitlement, and quota failures without exposing provider details", async t => {
+  const fetch = t.mock.method(globalThis, "fetch");
+  const secret = "test-secret";
+  const cases = [
+    [401, 424, "TWELVE_DATA_INVALID_KEY", false],
+    [403, 424, "TWELVE_DATA_ACCESS_DENIED", true],
+    [429, 429, "TWELVE_DATA_RATE_LIMIT", false],
+  ];
+  for (const [upstreamStatus, responseStatus, code, usesJsonCode] of cases) {
+    fetch.mock.mockImplementationOnce(async address => {
+      const url = new URL(address);
+      assert.equal(url.searchParams.get("symbol"), "XAU/USD");
+      assert.equal(url.searchParams.get("apikey"), secret);
+      return Response.json({ status: "error", code: upstreamStatus, message: secret }, { status: usesJsonCode ? 200 : upstreamStatus });
+    });
+    const reply = await apiFetch(request("/api/history?symbol=XAUUSD&frame=15m"), { TWELVE_DATA_API_KEY: secret });
+    assert.equal(reply.status, responseStatus);
+    const body = await reply.json();
+    assert.equal(body.code, code);
+    assert.ok(!body.error.includes(secret));
+  }
+});
+test("configured Twelve Data parses gold candles returned by the provider", async t => {
+  const values = [{ datetime: "2026-11-24 00:15:00", open: "2700", high: "2704", low: "2699", close: "2703" }];
+  const fetch = t.mock.method(globalThis, "fetch", async () => Response.json({ values }));
+  const reply = await apiFetch(request("/api/history?symbol=XAUUSD&frame=15m"), { TWELVE_DATA_API_KEY: "fixture" });
+  assert.equal(reply.status, 200);
+  const data = await reply.json();
+  assert.equal(data.source, "Twelve Data");
+  assert.equal(data.bars[0].close, 2703);
+  assert.equal(new URL(fetch.mock.calls[0].arguments[0]).searchParams.get("symbol"), "XAU/USD");
+});
+
 test("streaming exposes only an approved HTTPS relay URL", async () => {
   const env = { TWELVE_DATA_API_KEY: "server-secret", TWELVE_STREAM_URL: "https://relay.example/api/stream", VERCEL: "1" };
   const reply = await apiFetch(request("/api/config"), env);

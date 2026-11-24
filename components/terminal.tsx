@@ -7,7 +7,7 @@ import { Activity, Bell, CandlestickChart, Camera, ChevronDown, CircleHelp, Code
 import Chart from "./chart";
 import WorkspaceBackup from "./workspace-backup";
 import type { ChartApi, ViewMode } from "./chart";
-import { AssetIcon, CalendarPanel, MarketPicker, NewsPanel, Watchlist, direction, number, signed, stamp } from "./market-panels";
+import { AssetIcon, CalendarPanel, MarketDataSetup, MarketPicker, NewsPanel, Watchlist, direction, number, signed, stamp } from "./market-panels";
 import { useMarket, useQuotes } from "./use-market";
 import { useIndicators } from "./use-indicators";
 import { download, usePersisted, useScripts } from "./use-persisted";
@@ -42,7 +42,7 @@ const timezones = [ ["Asia/Jakarta", "WIB"], ["UTC", "UTC"], ["America/New_York"
 const frameNames = Object.keys(frames);
 const marketIds = markets.map(market => market.id);
 type Lower = typeof lowerTabs[number][0];
-type Dialog = "markets" | "indicators" | "alerts" | "settings" | "news" | null;
+type Dialog = "markets" | "indicators" | "alerts" | "settings" | "news" | "data" | null;
 type Preferences = { compare?: { symbol: string; frame: string }; bull?: string; bear?: string; symbol: string; frame: string; theme: string; tz: string; view: ViewMode; side: boolean; width: number; bottomHeight: number; provider: "auto" | "binance" | "okx" };
 const noDrawings: Drawing[] = [];
 const initial: Preferences = { symbol: "BTCUSDT", frame: "15m", theme: "dark", tz: "Asia/Jakarta", view: "candles", side: true, width: 324, bottomHeight: 335, provider: "auto" };
@@ -85,6 +85,7 @@ export default function Terminal() {
   const modal = useRef<HTMLDivElement>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const market = byId[prefs.symbol] ?? byId.BTCUSDT;
+  const usesTwelveData = market.category !== "Crypto" && market.id !== "US10Y";
   const supportedFrames = availableFrames(market);
   const frame = supportedFrames.includes(prefs.frame) ? prefs.frame : supportedFrames[0];
   const indicators = savedIndicators;
@@ -257,7 +258,7 @@ export default function Terminal() {
   }, [indicatorState.stats, onLog]);
 
   const backdrop = useMemo(() => ({ "--right-width": prefs.width + "px", "--bottom-max": prefs.bottomHeight + "px" } as CSSProperties), [prefs.width, prefs.bottomHeight]);
-  const modalTitle = dialog === "markets" ? "Cari pasar" : dialog === "indicators" ? "Pustaka indikator" : dialog === "alerts" ? "Alert" : dialog === "news" ? "Berita & kalender" : "Pengaturan workspace";
+  const modalTitle = dialog === "markets" ? "Cari pasar" : dialog === "indicators" ? "Pustaka indikator" : dialog === "alerts" ? "Alert" : dialog === "news" ? "Berita & kalender" : dialog === "data" ? "Data Forex & logam" : "Pengaturan workspace";
   const timezoneName = timezones.find(zone => zone[0] === prefs.tz)?.[1] ?? "WIB";
   const shortIndicators = indicators.filter(indicator => indicator.visible).slice(0,5);
 
@@ -327,7 +328,10 @@ export default function Terminal() {
               <span className="chart-blank-icon">{marketState.status === "connecting" ? <Activity size={23}/> : <CandlestickChart size={24}/>}</span>
               <strong>{marketState.status === "connecting" ? "Memuat riwayat pasar" : marketState.status === "setup" ? "Penyedia data belum terhubung" : "Chart belum tersedia"}</strong>
               <p>{marketState.message || market.id + " · " + frame}</p>
-              {marketState.status !== "connecting" && <button className="subtle-button" onClick={marketState.refresh}><RotateCcw size={14}/>Coba lagi</button>}
+              {marketState.status !== "connecting" && <div className="chart-blank-actions">
+                {usesTwelveData && <button className="accent-button" onClick={() => setDialog("data")}><Settings2 size={14}/>Konfigurasi data</button>}
+                <button className="subtle-button" onClick={marketState.refresh}><RotateCcw size={14}/>Coba lagi</button>
+              </div>}
             </div>}
             {marketState.loadingHistory && <div className="chart-toast">Memuat candle sebelumnya…</div>}
             {tool !== "cursor" && last && <div className="chart-toast">{["horizontal","vertical"].includes(tool) ? "Ketuk chart untuk meletakkan garis." : "Pilih dua titik pada chart."}</div>}
@@ -409,6 +413,7 @@ export default function Terminal() {
         {dialog === "indicators" && <><div className="modal-quick"><button className="subtle-button" onClick={() => { setDialog(null); setLower("manager"); }}><Layers3 size={15}/>Kelola indikator</button><button className="accent-button" onClick={() => { setRequested(null); setDialog(null); setLower("editor"); }}><Code2 size={15}/>Code Editor</button></div><IndicatorLibrary configs={indicators} scripts={scripts} onAdd={addIndicator} onEdit={showScript}/></>}
         {dialog === "alerts" && <AlertsPanel key={market.id + frame} alerts={alerts} market={market} timeframe={frame} plots={alertPlots} current={last?.close} timezone={prefs.tz} onAdd={item => { setAlerts(value => [...value,item]); tell("Alert " + item.symbol + " dibuat."); }} onRemove={id => setAlerts(value => value.filter(item => item.id !== id))}/>}
         {dialog === "news" && <><div className="category-filters mobile-news-tabs"><button className={mobileEditorial === "news" ? "selected" : ""} onClick={() => setMobileEditorial("news")}>Berita</button><button className={mobileEditorial === "calendar" ? "selected" : ""} onClick={() => setMobileEditorial("calendar")}>Kalender ekonomi</button></div>{mobileEditorial === "news" ? <NewsPanel timezone={prefs.tz}/> : <CalendarPanel timezone={prefs.tz}/>}</>}
+        {dialog === "data" && <MarketDataSetup market={usesTwelveData ? market : byId.XAUUSD} frame={usesTwelveData ? frame : "15m"}/>}
         {dialog === "settings" && <div className="settings">
           <div className="settings-form">
             <label>Tema<select value={prefs.theme} onChange={event => set({ theme: event.target.value })}><option value="dark">Gelap</option><option value="light">Terang</option></select></label>
@@ -419,6 +424,7 @@ export default function Terminal() {
             <label>Chart pembanding<select aria-label="Chart pembanding" value={prefs.compare ? "visible" : "hidden"} onChange={event => set({ compare: event.target.value === "visible" ? { symbol: market.id === "ETHUSDT" ? "BTCUSDT" : "ETHUSDT", frame: "1h" } : undefined })}><option value="hidden">Tersembunyi</option><option value="visible">Tampil</option></select></label>
             <label>Panel kanan<select value={prefs.side ? "visible" : "hidden"} onChange={event => set({ side: event.target.value === "visible" })}><option value="visible">Tampil</option><option value="hidden">Tersembunyi</option></select></label>
           </div>
+          <button className="subtle-button" onClick={() => setDialog("data")}><Settings2 size={15}/>Data Forex & logam</button>
           <h3>Layout tersimpan</h3>
           <form className="form-grid" onSubmit={event => { event.preventDefault(); const name = layoutName.trim(); if (!name) return; setSavedLayouts(items => ({ ...items, [name]: { preferences: prefs, indicators } })); setLayoutChoice(name); setLayoutName(""); tell("Layout " + name + " tersimpan."); }}>
             <label>Nama layout<input value={layoutName} maxLength={35} onChange={event => setLayoutName(event.target.value)} required/></label><button className="accent-button">Simpan layout</button>

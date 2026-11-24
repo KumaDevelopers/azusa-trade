@@ -121,6 +121,12 @@ kbd { font-size: .67rem; color: var(--dim); border: 1px solid var(--border); bor
 .market-main small b { margin: 0 3px; }
 .asset-icon { display: inline-grid; place-items: center; width: 37px; height: 37px; flex: 0 0 auto; border-radius: 50%; font-size: 1rem; line-height: 1; font-weight: 720; }
 .asset-icon.small { width: 26px; height: 26px; font-size: .8125rem; }
+.asset-icon.currency-pair { position: relative; isolation: isolate; }
+.currency-pair img { position: absolute; aspect-ratio: 1; object-fit: cover; border-radius: 50%; }
+.currency-base { inset: 0 auto auto 0; width: 73%; outline: 1px solid color-mix(in srgb, var(--text) 20%, transparent); }
+.currency-quote { inset: auto 0 0 auto; width: 61%; border: 2px solid var(--panel); }
+.market-strip .currency-quote, .symbol-button .currency-quote { border-color: var(--bg); }
+.metal-asset { outline: 1px solid color-mix(in srgb, currentColor 28%, transparent); outline-offset: -1px; }
 .headline-price { padding-left: 20px; border-left: 1px solid var(--border); flex: 0 0 auto; white-space: nowrap; }
 .headline-price strong { display: block; font-variant-numeric: tabular-nums; font-size: clamp(1.125rem, 2.05vw, 1.8rem); line-height: 1.1; letter-spacing: -.035em; }
 .headline-price small { display: block; font-size: .75rem; color: var(--muted); margin-top: 5px; }
@@ -155,7 +161,7 @@ kbd { font-size: .67rem; color: var(--dim); border: 1px solid var(--border); bor
 .plot-labels { display: flex; gap: 5px 12px; color: var(--muted); align-items: center; flex-wrap: wrap; font-size: .7rem; }
 .plot-labels span { display: inline-flex; align-items: center; gap: 5px; }
 .plot-labels i, .plot-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; flex: 0 0 auto; }
-.chart-blank { position: absolute; inset: 0 73px 26px 0; display: grid; align-content: center; justify-items: center; text-align: center; gap: 8px; pointer-events: none; padding: 22px; }
+.chart-blank { position: absolute; z-index: 2; inset: 0 73px 26px 0; display: grid; align-content: center; justify-items: center; text-align: center; gap: 8px; pointer-events: none; padding: 22px; }
 .chart-blank-icon { display: grid; place-items: center; width: 46px; height: 46px; border-radius: 12px; color: var(--accent); background: var(--accent-soft); margin-bottom: 3px; }
 .chart-blank p { max-width: 34ch; color: var(--muted); font-size: .86rem; }
 .chart-blank button { pointer-events: auto; margin-top: 4px; }
@@ -427,3 +433,15 @@ label input, label select, label textarea { width: 100%; }
   .with-comparison .drawing-tools { grid-row: 1 / 3; overflow-y: auto; }
   .with-comparison .comparison-chart { grid-column: 2; border-left: 0; border-top: 1px solid var(--border); }
 }
+
+.data-setup { display: grid; gap: 14px; font-size: .85rem; }
+.data-setup dl { display: grid; gap: 6px; }
+.data-setup dl div { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 4px 12px; }
+.data-setup dt, .data-setup li { color: var(--muted); }
+.data-setup dd { margin: 0; }
+.data-setup ol { display: grid; gap: 6px; padding-left: 20px; list-style: decimal; }
+.data-setup code { color: var(--text); }
+.data-setup a { color: var(--accent); text-underline-offset: .2em; text-decoration: underline; }
+.chart-blank-actions { display: flex; justify-content: center; flex-wrap: wrap; gap: 6px; }
+.compile-message details { margin-top: 4px; color: var(--muted); }
+.compile-message summary { cursor: pointer; }

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { CalendarDays, ExternalLink, Globe2, RefreshCw, Search, Star, X } from "lucide-react";
+import { CalendarDays, Coins, ExternalLink, Globe2, RefreshCw, Search, Star, X } from "lucide-react";
 import { markets, byId } from "../lib/instruments.mjs";
 import type { Article, CalendarEvent, Market, Quote } from "../lib/types";
 
@@ -13,8 +13,22 @@ export const stamp = (timestamp: number, timezone: string, dateStyle: "short" | 
 const time = (timestamp: number, timezone: string) => new Intl.DateTimeFormat("id-ID", { timeZone: timezone, hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(timestamp).replaceAll(".", ":");
 const grouped = ["Semua", "Crypto", "Forex", "Metals", "Favorit"] as const;
 
+const currencyFlags: Record<string, string> = {
+  EUR: "eu", USD: "us", GBP: "gb", JPY: "jp", AUD: "au", CAD: "ca", CHF: "ch", NZD: "nz",
+};
+
 export function AssetIcon({ market, small = false }: { market: Market; small?: boolean }) {
-  return <span className={"asset-icon" + (small ? " small" : "")} style={{ color: market.color, backgroundColor: market.color + "19" }}>{market.mark}</span>;
+  const size = "asset-icon" + (small ? " small" : "");
+  const base = market.category === "Forex" ? currencyFlags[market.asset] : undefined;
+  const quote = currencyFlags[market.quote];
+  if (base && quote) return <span className={size + " currency-pair"} aria-hidden="true">
+    <img className="currency-base" src={"/market-flags/" + base + ".png"} alt=""/>
+    <img className="currency-quote" src={"/market-flags/" + quote + ".png"} alt=""/>
+  </span>;
+  return <span className={size + (market.category === "Metals" ? " metal-asset" : "")} aria-hidden="true"
+    style={{ color: market.color, backgroundColor: market.color + "19" }}>
+    {market.category === "Metals" ? <Coins size={small ? 15 : 21} strokeWidth={1.7}/> : market.mark}
+  </span>;
 }
 
 export function MarketPicker({ selected, quotes, favorites, recent, onMarket, onFavorite, embedded = false }: {
@@ -132,5 +146,59 @@ export function CalendarPanel({ timezone }: { timezone: string }) {
       <small className="event-state">{event.actual ? "Dirilis" : event.date < now ? "Jadwal terlewati" : "Terjadwal"}</small>
     </div>)}
     {!filtered.length && !loading && !payload?.error && <div className="empty-inline"><CalendarDays size={16}/>Tidak ada jadwal untuk filter ini.</div>}
+  </div>;
+}
+
+export function MarketDataSetup({ market, frame }: { market: Market; frame: string }) {
+  const [config, setConfig] = useState<{ forex: boolean; forexStream: string | null }>();
+  const [checking, setChecking] = useState(false);
+  const [result, setResult] = useState<{ message: string; ok: boolean }>();
+  const [attempt, setAttempt] = useState(0);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(12_000)]);
+    async function check() {
+      try {
+        const settings = await fetch("/api/config", { cache: "no-store", signal });
+        if (!settings.ok) throw Error("Status deployment tidak dapat dibaca.");
+        const data = await settings.json();
+        if (signal.aborted) return;
+        setConfig(data);
+        if (!attempt) return;
+        const query = new URLSearchParams({ symbol: market.id, frame, limit: "10" });
+        const response = await fetch("/api/history?" + query, { cache: "no-store", signal });
+        const history = await response.json();
+        if (!response.ok) throw Error(history.error || "Riwayat dari Twelve Data belum tersedia.");
+        if (signal.aborted) return;
+        setResult(history.stale
+          ? { message: "Riwayat masih dari cache. Penyedia belum memberi respons terbaru.", ok: false }
+          : { message: market.id + " · " + history.bars.length + " candle diterima dari " + history.source + ".", ok: true });
+      } catch (error) {
+        if (!controller.signal.aborted) setResult({ message: signal.aborted ? "Waktu pemeriksaan habis." : error instanceof Error ? error.message : "Pemeriksaan gagal.", ok: false });
+      } finally {
+        if (!controller.signal.aborted) setChecking(false);
+      }
+    }
+    void check();
+    return () => controller.abort();
+  }, [attempt, frame, market.id]);
+
+  return <div className="data-setup">
+    <dl>
+      <div><dt>API key Twelve Data</dt><dd>{config ? config.forex ? "Tersimpan" : "Belum disetel" : "—"}</dd></div>
+      <div><dt>Relay tick live</dt><dd>{config ? config.forexStream ? "URL tersedia" : "Belum aktif" : "—"}</dd></div>
+    </dl>
+    <ol>
+      <li>Ambil API key dari <a href="https://twelvedata.com/account/api-keys" target="_blank" rel="noreferrer">Twelve Data</a>.</li>
+      <li>Di Vercel, buka <strong>Settings → Environment Variables</strong>. Simpan key sebagai <code>TWELVE_DATA_API_KEY</code> untuk Production, tipe Secret.</li>
+      <li>Redeploy, lalu uji riwayat {market.id}. Tick live memerlukan relay HTTPS lewat <code>TWELVE_STREAM_URL</code>.</li>
+    </ol>
+    <div className="settings-actions"><button className="accent-button" type="button" disabled={checking} onClick={() => {
+      setResult(undefined);
+      setChecking(true);
+      setAttempt(value => value + 1);
+    }}><RefreshCw size={15}/>{checking ? "Menguji…" : "Uji riwayat " + market.id}</button></div>
+    {result && <p className={result.ok ? "positive" : "negative"} role="status">{result.message}</p>}
   </div>;
 }

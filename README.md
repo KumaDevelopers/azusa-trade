@@ -35,7 +35,13 @@ npx vercel --prod
 
 Anggap kunci pemulihan Neon sebagai kredensial. Backup dipicu dari menu Pengaturan. Setiap simpan memeriksa revisi sehingga satu perangkat tidak menimpa backup yang telah diperbarui perangkat lain. Library script lokal memakai IndexedDB tanpa batas jumlah dari aplikasi. Ukuran transfer snapshot mengikuti batas HTTP Vercel.
 
-### Relay harga Forex dan metals
+### Mengaktifkan Forex dan logam
+
+1. Masuk ke Twelve Data dan ambil API key dari pengaturan akun. Cek akses paket untuk simbol dan interval yang akan ditampilkan, khususnya `XAU/USD` dan `XAG/USD`.
+2. Tambahkan `TWELVE_DATA_API_KEY` sebagai Secret di Vercel pada **Settings → Environment Variables → Production**. Redeploy deployment produksi terbaru.
+3. Dari AzusaTrade, pilih simbol lalu buka **Konfigurasi data → Uji riwayat**. Bisa juga cek `/api/history?symbol=XAUUSD&frame=15m&limit=10` pada domain proyek. Respons berisi `bars` jika feed menyediakan data. Kode `TWELVE_DATA_INVALID_KEY`, `TWELVE_DATA_ACCESS_DENIED`, dan `TWELVE_DATA_RATE_LIMIT` menunjukkan key ditolak, akses paket kurang, dan kuota habis.
+
+### Relay harga Forex dan logam
 
 Jalankan `Dockerfile` pada container terkelola yang terus berjalan dengan satu replika. Set `TWELVE_DATA_API_KEY`, `TERMINAL_ORIGIN` sesuai origin frontend Vercel, dan `PORT` jika penyedia host menentukannya. Arahkan `TWELVE_STREAM_URL` di Vercel ke `https://<relay>/api/stream`. Relay berbagi langganan Twelve Data dan meneruskan tick melalui SSE. Kunci provider hanya berada di backend. Saat stream belum tersedia, UI menampilkan status riwayat, delayed, market tutup, atau perlu konfigurasi sesuai feed. Saat WebSocket kripto terputus, chart memuat candle berkala dan menampilkan status polling jika data REST masih segar. Snapshot cadangan diberi label riwayat.
 
@@ -55,7 +61,9 @@ Lampiran asli tersedia di pustaka dengan nama **AzusaTrade — Advanced Indicato
 1a241de8c54ae2695af94c526f5af92a67dbc8f84179ca72b79e7dd4c4567e1c
 ```
 
-Editor dapat memuat sumber asli dan menampilkan diagnostik saat pengembangan. Pada deployment, sumber dapat diunduh dari editor jika operator mengaktifkan `GOLDGUARD_SOURCE_PUBLIC=1`. Eksekusi GoldGuard belum kompatibel dengan engine saat ini. Script menggunakan state persisten, custom types, request MTF, lower-timeframe arrays, objek visual, dan perilaku intrabar yang perlu diverifikasi sebelum mengaktifkan sinyal.
+Editor dapat memuat sumber asli dan menampilkan diagnostik saat pengembangan. Pada deployment, sumber dapat diunduh dari editor jika operator mengaktifkan `GOLDGUARD_SOURCE_PUBLIC=1`. Eksekusi GoldGuard belum kompatibel dengan engine saat ini. Pengaturan API market dan visibilitas sumber tidak mengaktifkan runtime Pine. Uji PineTS 0.13.1 pada data OHLCV lokal berhasil menjalankan EMA v6, sedangkan sumber GoldGuard asli gagal dengan `Undeclared identifier "Error"` sebelum menghasilkan plot.
+
+Untuk menjalankan GoldGuard dengan hasil yang bisa diverifikasi, runtime atau port harus mempertahankan state persisten, custom types, request MTF, lower-timeframe arrays, objek visual, dan perilaku intrabar. Sertakan konteks DXY dan yield yang sama saat filter makro digunakan. Pertahankan metode, reverse signal, entry, SL/TP, break-even, trailing stop, dan cut loss.
 
 Setelah ada runtime yang bisa menghasilkan ledger, ekspor OHLC dan kolom audit `GG_*` TradingView dengan simbol, sumber, rentang, dan pengaturan yang sama. Bandingkan keduanya melalui:
 

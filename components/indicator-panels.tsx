@@ -194,14 +194,14 @@ export function ScriptEditor({ requested, scripts, onSave, onRun, onStop, onDele
     try {
       const response = await fetch("/api/goldguard");
       if (response.status === 404) {
-        if (version === currentSelection.current) setMessage({ text: "Sumber asli GoldGuard tersedia di paket proyek." });
+        if (version === currentSelection.current) setMessage({ text: "GoldGuard belum bisa dijalankan. Sumber asli tersedia di repo proyek." });
         return;
       }
       if (!response.ok) throw Error();
       const code = await response.text();
       if (version !== currentSelection.current) return;
       setSource(code);
-      setMessage({ text: "Sumber asli GoldGuard. Compile menampilkan fitur Pine yang diperlukan untuk migrasi." });
+      setMessage({ text: "Sumber asli GoldGuard. Periksa kompatibilitas sebelum menjalankan indikator." });
     } catch {
       if (version === currentSelection.current) setMessage({ text: "Sumber GoldGuard tidak dapat dimuat.", error: true });
     }
@@ -280,7 +280,7 @@ export function ScriptEditor({ requested, scripts, onSave, onRun, onStop, onDele
       <button className="icon-btn" title="Cari/ganti kode" aria-label="Cari dan ganti kode" onClick={() => editor.current && openSearchPanel(editor.current)}><Search size={16}/></button>
       <button className="icon-btn" title="Rapikan spasi" aria-label="Rapikan spasi kode" disabled={isGold} onClick={() => setSource(source.split("\n").map(line => line.trimEnd()).join("\n").trimEnd() + "\n")}><Wand2 size={15}/></button>
       <button className="icon-btn" title="Impor file" aria-label="Impor script" onClick={() => file.current?.click()}><FileUp size={16}/></button>
-      <button className="icon-btn" title="Ekspor file" aria-label="Ekspor script" onClick={() => download((name.replace(/[^a-z0-9-_ ]/gi, "") || "indicator") + "." + extensions[language], source)}><Download size={16}/></button>
+      <button className="icon-btn" title="Ekspor file" aria-label="Ekspor script" disabled={!source} onClick={() => download((name.replace(/[^a-z0-9-_ ]/gi, "") || "indicator") + "." + extensions[language], source)}><Download size={16}/></button>
       <button className="icon-btn" title="Duplikat" aria-label="Duplikat script" disabled={!source} onClick={() => { setId(""); setName(name + " copy"); setMessage({ text: "Salinan siap diedit." }); }}><Copy size={15}/></button>
       <button className="icon-btn danger" title="Hapus script" aria-label="Hapus script" disabled={!id || isGold} onClick={() => {
         if (window.confirm("Hapus script ini dan lepaskan dari chart?")) { onDelete(id); void select(null); }
@@ -300,7 +300,7 @@ export function ScriptEditor({ requested, scripts, onSave, onRun, onStop, onDele
     </div>
     <div ref={host} className="code-host" aria-label="Editor kode indikator"/>
     <div className="editor-controls editor-actions">
-      <button className="subtle-button" disabled={loading || !source} onClick={() => void compile()}>Compile</button>
+      <button className="subtle-button" disabled={loading || !source} onClick={() => void compile()}>{isGold ? "Cek kompatibilitas" : "Compile"}</button>
       <button className="accent-button" disabled={loading || isGold || !source} onClick={() => void compile(true)}><Play size={14}/>Run</button>
       <button className="subtle-button" disabled={!id || isGold} onClick={() => onStop(id)}><Square size={13}/>Stop</button>
       <button className="subtle-button" disabled={isGold || !source} onClick={() => { if (save(scripts.find(item => item.id === id)?.overlay)) setMessage({ text: "Script tersimpan." }); }}><Save size={14}/>Simpan</button>
@@ -315,7 +315,9 @@ export function ScriptEditor({ requested, scripts, onSave, onRun, onStop, onDele
       <span className="secondary">{loading ? "Mengompilasi…" : nativeLanguage && !remote ? "Formula lokal" : langLabels[language]}</span>
     </div>
     {message && <div className={"compile-message" + (message.error ? " negative" : "")}><p>{message.text}</p>
-      {message.features?.length ? <ul>{message.features.map(feature => <li key={feature.name}>{feature.name} · {feature.count} penggunaan · baris {feature.line}</li>)}</ul> : null}
+      {message.features?.length ? <details><summary>Fitur Pine yang masih dibutuhkan</summary>
+        <ul>{message.features.map(feature => <li key={feature.name}>{feature.name} · {feature.count} penggunaan · baris {feature.line}</li>)}</ul>
+      </details> : null}
     </div>}
   </div>;
 }
