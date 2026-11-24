@@ -96,7 +96,7 @@ export function useIndicators(configs: Indicator[], scripts: Script[], bars: Bar
           pending.delete(id);
           if (data.error) disabled.add(id);
           setStats(previous => ({ ...previous, [id]: { duration: data.duration, bytes: data.bytes, error: data.error, log: data.log, timestamp: Date.now() } }));
-          if (!data.error) setResults(previous => ({ ...previous, [id]: { config, plots: data.plots, bars: chartBars, overlay: script?.overlay ?? definitions[config.kind]?.overlay ?? true } }));
+          if (!data.error) setResults(previous => ({ ...previous, [id]: { config, plots: data.plots, visuals: data.visuals ?? undefined, bars: chartBars, overlay: script?.overlay ?? definitions[config.kind]?.overlay ?? true } }));
         };
         worker.onerror = () => fail("Runtime indikator berhenti.");
         function fail(error: string) {

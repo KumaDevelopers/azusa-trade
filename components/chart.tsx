@@ -6,6 +6,7 @@ import { EyeOff, Pencil, Trash2, X } from "lucide-react";
 import { AreaSeries, BarSeries, CandlestickSeries, ColorType, CrosshairMode, HistogramSeries, LineSeries, LineStyle, createChart } from "lightweight-charts";
 import type { Coordinate, IChartApi, ISeriesApi, LogicalRange, SeriesType, Time, UTCTimestamp } from "lightweight-charts";
 import type { Bar, DrawPoint, Drawing, Market, RenderedIndicator, Tool } from "../lib/types";
+import PineDrawingLayer from "./pine-drawing-layer";
 
 export type ViewMode = "candles" | "line" | "area" | "bars" | "hollow";
 export type ChartApi = { reset: () => void; fit: () => void; capture: () => void; zoom: (factor: number) => void; live: () => void };
@@ -425,6 +426,7 @@ export default memo(forwardRef<ChartApi, ChartProps>(function Chart(props, ref) 
   };
   return <div className={"chart-frame draw-" + tool} data-repaint={layout}>
     <div ref={canvas} className="chart-canvas" aria-label={"Chart " + market.name}/>
+    <PineDrawingLayer chart={api.current} series={main.current} bars={bars} indicators={indicators} width={width} height={height}/>
     {(tool !== "cursor" || drawings.some(item => item.visible !== false)) && <svg
       className={"chart-drawings" + (tool !== "cursor" ? " drawing-mode" : "")}
       aria-label="Drawing pada chart"

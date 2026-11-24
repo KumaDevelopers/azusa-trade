@@ -37,7 +37,7 @@ echo [2/4] Salin source terbaru dengan Robocopy...
 rem %%~dp0 ends with a backslash; remove it before quoting for Robocopy.
 set "SOURCE=%~dp0"
 if "%SOURCE:~-1%"=="\" set "SOURCE=%SOURCE:~0,-1%"
-robocopy "%SOURCE%" "%TARGET%" /E /R:2 /W:2 /XD .git node_modules .next .vercel dist build download-history /XF .env .env.local .env.production .env.development
+robocopy "%SOURCE%" "%TARGET%" /E /R:2 /W:2 /XD .git node_modules .next .vercel dist build download-history PINETS-BACKUP-BEFORE-PATCH BROWSER-FIX-BACKUP RENDERER-BACKUP-BEFORE-PATCH /XF .env .env.local .env.production .env.development goldguard-diagnosis.txt
 if errorlevel 8 (
   echo [GAGAL] Robocopy mengalami error.
   exit /b 1
@@ -53,7 +53,7 @@ if not errorlevel 1 (
   echo Tidak ada perubahan baru yang perlu di-push.
   exit /b 0
 )
-git -C "%TARGET%" commit -m "Limit GoldGuard history to 180 while preserving trading logic"
+git -C "%TARGET%" commit -m "Render native PineTS drawings and tables without changing GoldGuard"
 if errorlevel 1 exit /b 1
 echo [4/4] Push ke origin main...
 git -C "%TARGET%" push origin main

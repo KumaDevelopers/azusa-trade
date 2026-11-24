@@ -5,7 +5,15 @@ export type FeedState = "connecting" | "live" | "polling" | "historical" | "dela
 export type Indicator = { uid: string; kind: string; length: number; multiplier: number; color: string; width: number; opacity: number; visible: boolean; frame: string };
 export type Script = { id: string; name: string; language: string; source: string; overlay: boolean; builtin?: boolean; remote?: boolean };
 export type Plot = { name: string; values: (number | null)[]; color?: string; type: "line" | "histogram"; directionColor?: boolean; offset?: number };
-export type RenderedIndicator = { config: Indicator; plots: Plot[]; bars: readonly Bar[]; overlay: boolean };
+export type PineVisuals = {
+  barIndexOffset?: number;
+  labels: { id: string; x: number; y: number; xloc?: string; yloc?: string; text: string; color?: string; textcolor?: string; style?: string; size?: string }[];
+  boxes: { id: string; left: number; right: number; top: number; bottom: number; xloc?: string; extend?: string; border_color?: string; border_style?: string; border_width?: number; bgcolor?: string; text?: string }[];
+  lines: { id: string; x1: number; y1: number; x2: number; y2: number; xloc?: string; extend?: string; color?: string; style?: string; width?: number }[];
+  tables: { id: string; position: string; cells: ({ text: string; bgcolor?: string; text_color?: string; text_halign?: string } | null)[][] }[];
+  shapes: { id: string; time: number; title: string; text?: string; shape?: string; location?: string; color?: string }[];
+};
+export type RenderedIndicator = { config: Indicator; plots: Plot[]; bars: readonly Bar[]; overlay: boolean; visuals?: PineVisuals };
 export type Execution = { duration?: number; bytes?: number; error?: string; log?: string; timestamp?: number };
 export type DrawPoint = { time: number; price: number };
 export type Tool = "cursor" | "horizontal" | "vertical" | "trend" | "rectangle" | "fibonacci" | "measure" | "risk";
