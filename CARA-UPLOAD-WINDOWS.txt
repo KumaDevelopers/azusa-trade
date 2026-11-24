@@ -1,34 +1,28 @@
-AzusaTrade biquote | GitHub -> Vercel
-===================================
-1. Ekstrak ZIP ke:
-   C:\Users\funka\Downloads\AzusaTrade-Biquote-Update\
-   Pastikan ada subfolder azusatrade\ yang berisi package.json dan UPDATE-GITHUB.cmd.
+AzusaTrade - Fix Pine Timeframe + Indicator/Drawing Controls
+============================================================
 
-2. Cara termudah: klik dua kali azusatrade\UPDATE-GITHUB.cmd.
-   Script otomatis git pull --rebase, Robocopy, commit dan push.
-   Tidak memakai force push atau Robocopy /MIR.
+1. Ekstrak ZIP ini ke:
+   C:\Users\funka\OneDrive - Document Office\Downloads\AzusaTrade-Pine-Chart-Controls-Fix\
+   Folder azusatrade\ harus berisi package.json, app, components, dan UPDATE-GITHUB.cmd.
 
-3. Manual lewat CMD (perintah satu demi satu):
+2. Cara otomatis: klik dua kali azusatrade\UPDATE-GITHUB.cmd.
+   Script menginstall dependency, menjalankan tes + typecheck + build,
+   kemudian git pull, Robocopy, commit dan push. Script akan berhenti jika tes gagal.
+
+3. Cara manual lewat CMD (jalankan SATU PER SATU, jangan lanjut jika gagal):
 
 cd /d "C:\Users\funka\Downloads\azusa-trade-github"
 git pull --rebase origin main
-robocopy "C:\Users\funka\Downloads\AzusaTrade-Biquote-Update\azusatrade" "C:\Users\funka\Downloads\azusa-trade-github" /E /R:2 /W:2 /XD .git node_modules .next .vercel dist build /XF .env .env.local .env.production .env.development
-git rm -f --ignore-unmatch -- server/relay.mjs server/twelve-stream.mjs Dockerfile .dockerignore
+robocopy "C:\Users\funka\OneDrive - Document Office\Downloads\AzusaTrade-Pine-Chart-Controls-Fix\azusatrade" "C:\Users\funka\Downloads\azusa-trade-github" /E /R:2 /W:2 /XD .git node_modules .next .vercel dist build /XF .env .env.local .env.production .env.development
+cd /d "C:\Users\funka\Downloads\azusa-trade-github"
 git add -A
 git diff --cached --stat
-git commit -m "Switch Forex to biquote real-time"
+git commit -m "Fix Pine timeframe and add chart controls"
 git push origin main
 
-Jika tidak ada perubahan, git commit akan melaporkan nothing to commit. Ini bukan error.
-Jika git pull gagal atau konflik, JANGAN lanjut push. Jangan gunakan git push --force.
+4. Sebaiknya uji sebelum push: npm ci, npm test, npm run typecheck, npm run build.
+   Jika 'npm' tidak dikenal, jalankan dulu set "PATH=C:\Program Files\nodejs;%PATH%"
+5. Periksa Deployments pada Vercel setelah push.
 
-4. Vercel Production: redeploy commit terbaru. API key Twelve Data tidak digunakan lagi.
-5. Periksa:
-   https://azusa-trade.vercel.app/api/config
-   https://azusa-trade.vercel.app/api/history?symbol=XAUUSD&frame=5m&limit=10
-   https://azusa-trade.vercel.app/api/price?symbol=XAUUSD
-
-Catatan: sistem ini mengganti Forex dengan biquote tanpa mempengaruhi jalur Binance/OKX.
-Pine tetap subset; GoldGuard belum bisa dijalankan penuh dengan runtime yang tersedia.
-
-Seluruh file tidak boleh dipublish jika terdapat data rahasia pribadi; file .env dikecualikan.
+Tidak menggunakan Robocopy /MIR maupun git push --force.
+GoldGuard.pine tidak diubah. GoldGuard belum terbukti kompatibel penuh.

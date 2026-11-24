@@ -1,5 +1,6 @@
 @echo off
 setlocal
+if exist "C:\Program Files\nodejs\npm.cmd" set "PATH=C:\Program Files\nodejs;%PATH%"
 set "TARGET=C:\Users\funka\Downloads\azusa-trade-github"
 if not exist "%TARGET%\.git" (
   echo [GAGAL] Folder repo GitHub belum ada: %TARGET%
@@ -11,9 +12,11 @@ if errorlevel 1 (
   echo [GAGAL] Git pull gagal. Periksa konflik terlebih dahulu.
   exit /b 1
 )
-echo [CHECK] Pastikan PineTS sudah terpasang dan package-lock sinkron...
-if not exist "%~dp0node_modules\pinets\package.json" (
-  echo [GAGAL] Jalankan npm install pinets@0.13.1 --save-exact dari folder azusatrade dahulu.
+echo [CHECK] Install dependency dari package-lock.json...
+cd /d "%~dp0"
+call npm ci --no-audit --no-fund
+if errorlevel 1 (
+  echo [GAGAL] Dependency tidak berhasil di-install.
   exit /b 1
 )
 echo [CHECK] Verifikasi paket dan test...
@@ -41,7 +44,7 @@ if not errorlevel 1 (
   echo Tidak ada perubahan baru yang perlu di-push.
   exit /b 0
 )
-git -C "%TARGET%" commit -m "Add experimental PineTS v6 execution backend"
+git -C "%TARGET%" commit -m "Fix Pine timeframe and add indicator drawing controls"
 if errorlevel 1 exit /b 1
 echo [4/4] Push ke origin main...
 git -C "%TARGET%" push origin main

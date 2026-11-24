@@ -94,8 +94,9 @@ export function IndicatorLibrary({ configs, scripts, onAdd, onEdit }: { configs:
   </div>;
 }
 
-export function IndicatorManager({ configs, scripts, stats, onChange, onRemove, timezone }: { configs: Indicator[]; scripts: Script[]; stats: Record<string, Execution>; onChange: (uid: string, patch: Partial<Indicator>) => void; onRemove: (uid: string) => void; timezone: string }) {
+export function IndicatorManager({ configs, scripts, stats, onChange, onRemove, timezone, focusUid = "" }: { focusUid?: string; configs: Indicator[]; scripts: Script[]; stats: Record<string, Execution>; onChange: (uid: string, patch: Partial<Indicator>) => void; onRemove: (uid: string) => void; timezone: string }) {
   const [expanded, setExpanded] = useState("");
+  useEffect(() => { if (focusUid) setExpanded(focusUid); }, [focusUid]);
   return <div className="indicator-manager">
     <div className="panel-intro"><h3>Indikator pada chart</h3><span className="limit-pill">{configs.filter(config => config.visible).length}/{MAX_ACTIVE} aktif</span></div>
     {!configs.length && <p className="empty-inline">Belum ada indikator pada chart.</p>}

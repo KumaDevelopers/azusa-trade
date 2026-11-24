@@ -33,7 +33,7 @@ export default function ComparisonChart({ symbol, frame, theme, timezone, provid
       <button className="icon-btn tiny" title="Tutup chart pembanding" aria-label="Tutup chart pembanding" onClick={onClose}><X size={16}/></button>
     </div>
     <div className="plot-wrap">
-      <Chart market={market} period={frames[interval]} scene={feed.key + ":" + feed.source} bars={feed.bars} theme={theme} timezone={timezone} type={type} bull={bull} bear={bear} indicators={indicators} drawings={drawings} tool="cursor" onDraw={noop} onHover={noop}/>
+      <Chart market={market} period={frames[interval]} scene={feed.key + ":" + feed.source} bars={feed.bars} theme={theme} timezone={timezone} type={type} bull={bull} bear={bear} indicators={indicators} drawings={drawings} tool="cursor" onDraw={noop} onChangeDrawing={noop} onHover={noop}/>
       {!feed.bars.length && <div className="chart-blank"><p>{feed.message || "Memuat chart pembanding"}</p></div>}
     </div>
   </aside>;

@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
-import { makeMarketProvider, runAdvancedPine, toPineBars } from '../lib/pine-advanced.mjs';
+import { makeMarketProvider, nativeFrame, runAdvancedPine, toPineBars } from '../lib/pine-advanced.mjs';
 
 const candles = [
   { time: 60, end: 120, open: 2, high: 3, low: 1, close: 2.5, volume: 4, closed: true },
@@ -46,4 +46,20 @@ test('secondary provider rejects stale and missing data rather than fabricating 
 test('original GoldGuard trading source is unchanged', () => {
   const data=readFileSync(new URL('../indicators/GoldGuard.pine',import.meta.url));
   assert.equal(createHash('sha256').update(data).digest('hex'),'1a241de8c54ae2695af94c526f5af92a67dbc8f84179ca72b79e7dd4c4567e1c');
+});
+
+test('Pine timeframe defaults use actual chart frame and native hourly/daily frames normalize', async () => {
+  assert.equal(nativeFrame('15m'), '15m');
+  assert.equal(nativeFrame('1h'), '1h');
+  assert.equal(nativeFrame('60'), '1h');
+  assert.equal(nativeFrame('D'), '1d');
+  assert.equal(nativeFrame('1w'), '1w');
+  const source = '//@version=6\nindicator("Clock")\nplot(close)';
+  class PineTS {
+    constructor(provider, symbol, timeframe) { assert.equal(timeframe, '15'); }
+    async run() { return {plots:{}}; }
+  }
+  await runAdvancedPine(source, candles, {market:'XAUUSD',frame:'15m'}, {PineTS});
+  const provider = makeMarketProvider({market:'XAUUSD',frame:'15m',bars:candles});
+  assert.equal((await provider.getMarketData('XAUUSD', '')).length, 2);
 });

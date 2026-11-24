@@ -445,3 +445,34 @@ label input, label select, label textarea { width: 100%; }
 .chart-blank-actions { display: flex; justify-content: center; flex-wrap: wrap; gap: 6px; }
 .compile-message details { margin-top: 4px; color: var(--muted); }
 .compile-message summary { cursor: pointer; }
+
+/* Chart interactions: draw by dragging or two clicks, and select existing drawings. */
+.chart-drawings.drawing-mode { pointer-events: auto; touch-action: none; cursor: crosshair; }
+.chart-drawings .drawing-selectable, .chart-drawings .drawing-selected { pointer-events: none; }
+.chart-drawings .drawing-selectable [pointer-events], .chart-drawings .drawing-selected [pointer-events] { pointer-events: all; cursor: pointer; }
+.chart-drawings .drawing-selected [pointer-events] { cursor: pointer; }
+.drawing-selection-menu { position: absolute; z-index: 6; right: 84px; top: 58px; display: flex; align-items: center; flex-wrap: wrap; gap: 5px; background: var(--raised); border: 1px solid var(--border); border-radius: 8px; padding: 5px 7px; box-shadow: 0 9px 24px #0004; }
+.drawing-selection-menu span { color: var(--muted); font-size: .72rem; text-transform: capitalize; margin-right: 4px; }
+.drawing-selection-menu button { padding: 4px 7px; background: var(--hover); border-radius: 4px; font-size: .72rem; }
+.drawing-selection-menu button:hover { color: var(--accent); }
+.drawing-selection-menu button.danger:hover { color: var(--negative); }
+.plot-labels { pointer-events: auto; }
+.plot-chip { display: inline-flex; align-items: center; min-width: 0; gap: 5px; border-radius: 5px; padding: 2px 4px; background: color-mix(in srgb, var(--raised) 65%, transparent); }
+.plot-chip.muted { opacity: .55; }
+.plot-chip-name { display: inline-block; white-space: nowrap; max-width: 128px; overflow: hidden; text-overflow: ellipsis; }
+.plot-chip button { display: inline-flex; width: 19px; height: 19px; justify-content: center; align-items: center; border-radius: 4px; color: var(--muted); }
+.plot-chip button:hover { background: var(--hover); color: var(--accent); }
+.plot-chip button:last-child:hover { color: var(--negative); }
+.drawing-manager-popup { position: absolute; z-index: 7; left: 10px; top: 120px; width: min(270px, calc(100% - 24px)); max-height: min(340px, 65%); overflow-y: auto; background: var(--panel); border: 1px solid var(--border); border-radius: 9px; padding: 10px; box-shadow: 0 12px 32px #0005; }
+.drawing-manager-title, .drawing-manager-item { display: flex; align-items: center; gap: 7px; }
+.drawing-manager-title { justify-content: space-between; margin-bottom: 7px; }
+.drawing-manager-item { border-top: 1px solid var(--border-soft); padding: 6px 0; }
+.drawing-manager-item span { flex: 1; text-transform: capitalize; color: var(--muted); }
+.drawing-manager-item button, .drawing-manager-title button { width: 26px; height: 26px; display: grid; place-items: center; border-radius: 4px; }
+.drawing-manager-item button:hover, .drawing-manager-title button:hover { background: var(--hover); color: var(--accent); }
+.drawing-manager-all { width: 100%; padding: 7px; background: var(--hover); margin-top: 6px; border-radius: 5px; font-size: .74rem; }
+/* Keep the chart legend compact; reveal per-indicator actions on hover/focus. */
+@media (hover: hover) and (pointer: fine) {
+  .plot-chip button { width: 0; opacity: 0; overflow: hidden; transition: width .12s ease, opacity .12s ease; }
+  .plot-chip:hover button, .plot-chip:focus-within button { width: 19px; opacity: 1; }
+}

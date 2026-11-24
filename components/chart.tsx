@@ -1,8 +1,9 @@
 "use client";
 
 import { forwardRef, memo, useEffect, useImperativeHandle, useRef, useState } from "react";
+import type { PointerEvent as ReactPointerEvent } from "react";
 import { AreaSeries, BarSeries, CandlestickSeries, ColorType, CrosshairMode, HistogramSeries, LineSeries, LineStyle, createChart } from "lightweight-charts";
-import type { IChartApi, ISeriesApi, LogicalRange, MouseEventParams, SeriesType, Time, UTCTimestamp } from "lightweight-charts";
+import type { Coordinate, IChartApi, ISeriesApi, LogicalRange, SeriesType, Time, UTCTimestamp } from "lightweight-charts";
 import type { Bar, DrawPoint, Drawing, Market, RenderedIndicator, Tool } from "../lib/types";
 
 export type ViewMode = "candles" | "line" | "area" | "bars" | "hollow";
@@ -10,7 +11,7 @@ export type ChartApi = { reset: () => void; fit: () => void; capture: () => void
 type ChartProps = {
   market: Market; period: number; scene: string; bars: Bar[]; type: ViewMode; theme: string;
   timezone: string; bull?: string; bear?: string; indicators: RenderedIndicator[]; drawings: Drawing[]; tool: Tool;
-  onDraw: (drawing: Drawing) => void; onHover: (bar: Bar | null) => void;
+  onDraw: (drawing: Drawing) => void; onChangeDrawing: (id: string, patch: Partial<Drawing> | null) => void; onHover: (bar: Bar | null) => void;
 };
 
 type Coordinates = { x: number; y: number };
@@ -27,6 +28,9 @@ export default memo(forwardRef<ChartApi, ChartProps>(function Chart(props, ref) 
   const [layout, setLayout] = useState(0);
   const [pending, setPending] = useState<DrawPoint | null>(null);
   const [pointer, setPointer] = useState<Coordinates | null>(null);
+  const [dragStart, setDragStart] = useState<DrawPoint | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const gesture = useRef<{ start: DrawPoint; x: number; y: number; pointerId: number } | null>(null);
   const api = useRef<IChartApi | null>(null);
   const main = useRef<ISeriesApi<SeriesType> | null>(null);
   const overlays = useRef(new Map<string, { signature: string; series: ISeriesApi<"Line" | "Histogram">; first?: number; count?: number; last?: number }>());
@@ -35,7 +39,6 @@ export default memo(forwardRef<ChartApi, ChartProps>(function Chart(props, ref) 
   const lastSeries = useRef<{ bars: Bar[]; scene: string; type: ViewMode } | null>(null);
   const currentBars = useRef(new Map<number, Bar>());
   const originalRange = useRef<LogicalRange | null>(null);
-  const chartClick = useRef<(data: MouseEventParams<Time>) => void>(() => {});
   const drawFrame = useRef(0);
   const themeIsLight = theme === "light";
 
@@ -60,7 +63,6 @@ export default memo(forwardRef<ChartApi, ChartProps>(function Chart(props, ref) 
       latest.current.onHover(typeof event.time === "number" ? currentBars.current.get(event.time) || null : null);
       if (latest.current.tool !== "cursor") setPointer(event.point ?? null);
     });
-    chart.subscribeClick(event => chartClick.current(event));
     const resize = new ResizeObserver(repaint);
     const node = canvas.current;
     resize.observe(node);
@@ -199,25 +201,82 @@ export default memo(forwardRef<ChartApi, ChartProps>(function Chart(props, ref) 
     }
   }, [indicators, scene, paneSignature, period]);
 
-  useEffect(() => { setPending(null); setPointer(null); }, [tool, scene]);
+  useEffect(() => { setPending(null); setPointer(null); setDragStart(null); gesture.current = null; setSelectedId(null); }, [tool, scene]);
   function position(point: DrawPoint): Coordinates | null {
     const chart = api.current;
     const series = main.current;
     if (!chart || !series) return null;
-    const x = chart.timeScale().timeToCoordinate(utc(point.time));
+    let x: number | null = chart.timeScale().timeToCoordinate(utc(point.time));
     const y = series.priceToCoordinate(point.price);
+    // Lightweight Charts may not map timestamps beyond the latest candle.
+    // Future/right-margin drawing points still need to be rendered.
+    if (x === null && latest.current.bars.length) {
+      const source = latest.current.bars;
+      const last = source[source.length - 1];
+      const logical = source.length - 1 + (point.time - last.time) / period;
+      x = chart.timeScale().logicalToCoordinate(logical as import("lightweight-charts").Logical);
+    }
     return x === null || y === null ? null : { x: Number(x), y: Number(y) };
   }
-  chartClick.current = event => {
-    if (tool === "cursor" || typeof event.time !== "number" || !event.point) return;
-    const price = main.current?.coordinateToPrice(event.point.y);
-    if (price === null || price === undefined) return;
-    const point = { time: event.time, price };
-    if (tool === "horizontal" || tool === "vertical") { props.onDraw({ id: crypto.randomUUID(), type: tool, points: [point] }); return; }
-    if (!pending) { setPending(point); return; }
-    props.onDraw({ id: crypto.randomUUID(), type: tool, points: [pending, point] });
-    setPending(null);
-  };
+  // The overlay consumes pointer gestures only while a drawing tool is selected.
+  // Clicking twice and pressing/dragging both produce the same two-point shape.
+  function pointerCoordinates(event: ReactPointerEvent<SVGSVGElement>): Coordinates {
+    const rect = event.currentTarget.getBoundingClientRect();
+    return { x: event.clientX - rect.left, y: event.clientY - rect.top };
+  }
+  function chartPoint(coords: Coordinates): DrawPoint | null {
+    const series = main.current;
+    const chart = api.current;
+    if (!series || !chart) return null;
+    const price = series.coordinateToPrice(coords.y as Coordinate);
+    if (price === null || !Number.isFinite(price)) return null;
+    const scale = chart.timeScale();
+    const ts = scale.coordinateToTime(coords.x as Coordinate);
+    let time = typeof ts === "number" ? ts : NaN;
+    if (!Number.isFinite(time)) {
+      const logical = scale.coordinateToLogical(coords.x as Coordinate);
+      if (logical === null || !latest.current.bars.length) return null;
+      const list = latest.current.bars;
+      const index = Math.round(logical);
+      time = index < 0 ? list[0].time + index * period : index >= list.length
+        ? list[list.length - 1].time + (index - list.length + 1) * period : list[index].time;
+    }
+    return { time: Math.round(time), price };
+  }
+  function beginDrawing(event: ReactPointerEvent<SVGSVGElement>) {
+    if (tool === "cursor" || event.button !== 0) return;
+    const coords = pointerCoordinates(event);
+    const point = chartPoint(coords);
+    if (!point) return;
+    event.preventDefault();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    gesture.current = { start: point, x: coords.x, y: coords.y, pointerId: event.pointerId };
+    setDragStart(point);
+    setPointer(coords);
+  }
+  function moveDrawing(event: ReactPointerEvent<SVGSVGElement>) {
+    if (tool === "cursor") return;
+    setPointer(pointerCoordinates(event));
+  }
+  function endDrawing(event: ReactPointerEvent<SVGSVGElement>) {
+    const active = gesture.current;
+    if (!active || active.pointerId !== event.pointerId || tool === "cursor") return;
+    gesture.current = null;
+    setDragStart(null);
+    const coords = pointerCoordinates(event);
+    const target = chartPoint(coords);
+    if (!target) return;
+    const moved = Math.hypot(coords.x - active.x, coords.y - active.y) >= 5;
+    if (tool === "horizontal" || tool === "vertical") {
+      latest.current.onDraw({ id: crypto.randomUUID(), type: tool, points: [target] });
+    } else if (moved) {
+      latest.current.onDraw({ id: crypto.randomUUID(), type: tool, points: [pending ?? active.start, target] });
+      setPending(null);
+    } else if (pending) {
+      latest.current.onDraw({ id: crypto.randomUUID(), type: tool, points: [pending, target] });
+      setPending(null);
+    } else setPending(target);
+  }
   useImperativeHandle(ref, () => ({
     reset() { if (originalRange.current) api.current?.timeScale().setVisibleLogicalRange(originalRange.current); },
     fit() { api.current?.timeScale().fitContent(); },
@@ -241,34 +300,65 @@ export default memo(forwardRef<ChartApi, ChartProps>(function Chart(props, ref) 
   }), [market.id]);
 
   function visual(drawing: Drawing) {
+    if (drawing.visible === false) return null;
     const a = position(drawing.points[0]);
     const b = drawing.points[1] ? position(drawing.points[1]) : null;
     const width = canvas.current?.clientWidth || 0;
     const height = chartHeight(api.current, canvas.current);
     if (!a) return null;
-    const style = { stroke: "#7fbcf9", strokeWidth: 1.4 };
-    if (drawing.type === "horizontal") return <g key={drawing.id}><line {...style} x1="0" x2={width - 74} y1={a.y} y2={a.y} strokeDasharray="5 4"/><text x="12" y={a.y - 5}>{drawing.points[0].price.toFixed(market.precision)}</text></g>;
-    if (drawing.type === "vertical") return <line key={drawing.id} {...style} x1={a.x} x2={a.x} y1="0" y2={height} strokeDasharray="5 4"/>;
-    if (!b) return null;
-    if (drawing.type === "trend") return <line key={drawing.id} {...style} x1={a.x} x2={b.x} y1={a.y} y2={b.y}/>;
-    const x = Math.min(a.x, b.x), w = Math.max(1, Math.abs(a.x - b.x)), y = Math.min(a.y, b.y), h = Math.abs(a.y - b.y);
-    if (drawing.type === "rectangle") return <rect key={drawing.id} {...style} x={x} y={y} width={w} height={h} fill="#7fbcf91a"/>;
-    if (drawing.type === "fibonacci") return <g key={drawing.id}>{[0, .236, .382, .5, .618, .786, 1].map(ratio => {
-      const top = a.y + (b.y - a.y) * ratio;
-      return <g key={ratio}><line {...style} x1={x} x2={x + w} y1={top} y2={top}/><text x={x + 4} y={top - 3}>{ratio}</text></g>;
-    })}</g>;
-    const loss = Math.abs(drawing.points[1].price - drawing.points[0].price);
-    if (drawing.type === "measure") return <g key={drawing.id}><line {...style} x1={a.x} x2={b.x} y1={a.y} y2={b.y} strokeDasharray="3 4"/><text x={x + 4} y={y - 5}>{(loss / drawing.points[0].price * 100).toFixed(2)}%</text></g>;
-    const yTarget = a.y + (a.y - b.y) * 2;
-    return <g key={drawing.id}><rect x={x} y={y} width={w} height={h} fill="#ed7b8938" stroke={down}/><rect x={x} y={Math.min(yTarget, a.y)} width={w} height={Math.abs(yTarget - a.y)} fill="#39c89b30" stroke={up}/><text x={x + 5} y={a.y - 5}>R/R 2.00</text></g>;
+    const selected = selectedId === drawing.id;
+    const style = { stroke: selected ? "#f2d184" : "#7fbcf9", strokeWidth: selected ? 2.4 : 1.4 };
+    let shape;
+    let hit;
+    if (drawing.type === "horizontal") {
+      shape = <><line {...style} x1="0" x2={width - 74} y1={a.y} y2={a.y} strokeDasharray="5 4"/><text x="12" y={a.y - 5}>{drawing.points[0].price.toFixed(market.precision)}</text></>;
+      hit = <line x1="0" x2={width - 74} y1={a.y} y2={a.y} stroke="transparent" strokeWidth="16" pointerEvents="stroke"/>;
+    } else if (drawing.type === "vertical") {
+      shape = <line {...style} x1={a.x} x2={a.x} y1="0" y2={height} strokeDasharray="5 4"/>;
+      hit = <line x1={a.x} x2={a.x} y1="0" y2={height} stroke="transparent" strokeWidth="16" pointerEvents="stroke"/>;
+    } else if (b) {
+      const x = Math.min(a.x, b.x), w = Math.max(1, Math.abs(a.x - b.x));
+      const y = Math.min(a.y, b.y), h = Math.max(1, Math.abs(a.y - b.y));
+      if (drawing.type === "trend") shape = <line {...style} x1={a.x} x2={b.x} y1={a.y} y2={b.y}/>;
+      else if (drawing.type === "rectangle") shape = <rect {...style} x={x} y={y} width={w} height={h} fill="#7fbcf91a"/>;
+      else if (drawing.type === "fibonacci") shape = <>{[0, .236, .382, .5, .618, .786, 1].map(ratio => {
+        const top = a.y + (b.y - a.y) * ratio;
+        return <g key={ratio}><line {...style} x1={x} x2={x+w} y1={top} y2={top}/><text x={x+4} y={top-3}>{ratio}</text></g>;
+      })}</>;
+      else if (drawing.type === "measure") shape = <><line {...style} x1={a.x} x2={b.x} y1={a.y} y2={b.y} strokeDasharray="3 4"/><text x={x+4} y={y-5}>{(Math.abs(drawing.points[1].price-drawing.points[0].price)/drawing.points[0].price*100).toFixed(2)}%</text></>;
+      else {
+        const yTarget = a.y + (a.y - b.y) * 2;
+        shape = <><rect x={x} y={y} width={w} height={h} fill="#ed7b8938" stroke={down}/><rect x={x} y={Math.min(yTarget,a.y)} width={w} height={Math.abs(yTarget-a.y)} fill="#39c89b30" stroke={up}/><text x={x+5} y={a.y-5}>R/R 2.00</text></>;
+      }
+      hit = drawing.type === "trend" || drawing.type === "measure"
+        ? <line x1={a.x} x2={b.x} y1={a.y} y2={b.y} stroke="transparent" strokeWidth="18" pointerEvents="stroke"/>
+        : <rect x={x} y={y} width={w} height={h} fill="transparent" stroke="transparent" strokeWidth="14" pointerEvents="all"/>;
+    }
+    if (!shape) return null;
+    return <g key={drawing.id} className={selected ? "drawing-selected" : "drawing-selectable"} onPointerDown={event => {
+      if (tool !== "cursor") return;
+      event.stopPropagation();
+      event.preventDefault();
+      setSelectedId(drawing.id);
+    }}>
+      {shape}
+      {tool === "cursor" && hit}
+    </g>;
   }
-  const draft = pending ? position(pending) : null;
+  const selected = drawings.find(item => item.id === selectedId && item.visible !== false);
+  const draft = pending ? position(pending) : dragStart ? position(dragStart) : null;
   return <div className={"chart-frame draw-" + tool} data-repaint={layout}>
     <div ref={canvas} className="chart-canvas" aria-label={"Chart " + market.name}/>
-    {(drawings.length > 0 || draft) && <svg className="chart-drawings" aria-hidden="true">
+    {(tool !== "cursor" || drawings.some(item => item.visible !== false)) && <svg className={"chart-drawings" + (tool !== "cursor" ? " drawing-mode" : "")} aria-label="Drawing pada chart" onPointerDown={beginDrawing} onPointerMove={moveDrawing} onPointerUp={endDrawing} onPointerCancel={() => { gesture.current = null; setDragStart(null); }}>
       {drawings.map(visual)}
       {draft && <><circle cx={draft.x} cy={draft.y} r="4" fill="#8cc3ff"/>{pointer && <line x1={draft.x} y1={draft.y} x2={pointer.x} y2={pointer.y} stroke="#8cc3ff" strokeDasharray="4 4"/>}</>}
     </svg>}
+    {selected && tool === "cursor" && <div className="drawing-selection-menu" role="group" aria-label="Pengaturan drawing terpilih">
+      <span>{selected.type}</span>
+      <button onClick={() => { props.onChangeDrawing(selected.id, { visible: false }); setSelectedId(null); }} aria-label="Sembunyikan drawing">Sembunyikan</button>
+      <button className="danger" onClick={() => { props.onChangeDrawing(selected.id, null); setSelectedId(null); }} aria-label="Hapus drawing">Hapus</button>
+      <button onClick={() => setSelectedId(null)} aria-label="Batalkan seleksi">×</button>
+    </div>}
   </div>;
 }));
 

@@ -3,7 +3,7 @@
 import dynamic from "next/dynamic";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
-import { Activity, Bell, CandlestickChart, Camera, ChevronDown, CircleHelp, Code2, Crosshair, FlaskConical, Globe2, GripHorizontal, Layers3, LayoutPanelLeft, List, Maximize, Minus, MoveHorizontal, MoveUpRight, Newspaper, PanelBottom, PanelRight, Plus, RectangleHorizontal, RotateCcw, Ruler, ScanLine, Search, Settings2, SlidersHorizontal, Star, Terminal as TerminalIcon, TrendingUp, Undo2, Wifi, X } from "lucide-react";
+import { Activity, Bell, CandlestickChart, Camera, ChevronDown, CircleHelp, Code2, Crosshair, Eye, EyeOff, Trash2, FlaskConical, Globe2, GripHorizontal, Layers3, LayoutPanelLeft, List, Maximize, Minus, MoveHorizontal, MoveUpRight, Newspaper, PanelBottom, PanelRight, Plus, RectangleHorizontal, RotateCcw, Ruler, ScanLine, Search, Settings2, SlidersHorizontal, Star, Terminal as TerminalIcon, TrendingUp, Undo2, Wifi, X } from "lucide-react";
 import Chart from "./chart";
 import WorkspaceBackup from "./workspace-backup";
 import type { ChartApi, ViewMode } from "./chart";
@@ -65,6 +65,10 @@ export default function Terminal() {
   const [favorites, setFavorites] = usePersisted<string[]>("favorites-v1", ["BTCUSDT", "ETHUSDT", "SOLUSDT", "XAUUSD"]);
   const [recent, setRecent] = usePersisted<string[]>("recent-v1", []);
   const [drawings, setDrawings] = usePersisted<Record<string, Drawing[]>>("drawings-v1", {});
+  const [hideAllIndicators, setHideAllIndicators] = usePersisted("hide-all-indicators-v1", false);
+  const [hideAllDrawings, setHideAllDrawings] = usePersisted("hide-all-drawings-v1", false);
+  const [showDrawingsManager, setShowDrawingsManager] = useState(false);
+  const [focusIndicator, setFocusIndicator] = useState("");
   const [alerts, setAlerts] = usePersisted<Alert[]>("alerts-v1", []);
   const [positions, setPositions] = usePersisted<Position[]>("simulations-v1", []);
   const [note, setNote] = usePersisted("journal-v1", "");
@@ -153,6 +157,7 @@ export default function Terminal() {
     if (!byIndicator[kind] && !scripts.some(item => item.id === kind)) return;
     const next = { uid: crypto.randomUUID(), kind, length: byIndicator[kind]?.length ?? 20, multiplier: 2, width: 1, opacity: 100, visible: true, color: PALETTE[indicators.length % PALETTE.length], frame: "" };
     setIndicators(values => values.filter(config => config.visible).length < MAX_ACTIVE ? [...values, next] : values);
+    setHideAllIndicators(false);
     tell((byIndicator[kind]?.short ?? "Script") + " ditambahkan ke chart.");
   };
   const updateIndicator = (uid: string, patch: Partial<Indicator>) => {
@@ -174,13 +179,21 @@ export default function Terminal() {
       if (existing) return values.map(item => item.uid === existing.uid ? { ...item, visible: true } : item);
       return [...values, { uid: crypto.randomUUID(), kind: script.id, length: 20, multiplier: 2, color: PALETTE[values.length % PALETTE.length], visible: true, width: 2, opacity: 100, frame: "" }];
     });
+    setHideAllIndicators(false);
     tell("Script dijalankan pada chart.");
   };
   const addDrawing = useCallback((drawing: Drawing) => {
     setDrawings(values => ({ ...values, [market.id]: [...(values[market.id] ?? []), drawing] }));
+    setHideAllDrawings(false);
     setTool("cursor");
-  }, [market.id, setDrawings]);
+  }, [market.id, setDrawings, setHideAllDrawings]);
   const undoDrawing = () => setDrawings(value => ({ ...value, [market.id]: listed.slice(0,-1) }));
+  const changeDrawing = useCallback((id: string, patch: Partial<Drawing> | null) => {
+    setDrawings(value => ({ ...value, [market.id]: patch === null
+      ? (value[market.id] ?? []).filter(item => item.id !== id)
+      : (value[market.id] ?? []).map(item => item.id === id ? { ...item, ...patch } : item) }));
+  }, [market.id, setDrawings]);
+  const settingsForIndicator = (uid: string) => { setFocusIndicator(uid); setLower("manager"); };
   const closePosition = (id: string) => {
     if (!live || !last) return;
     setPositions(items => items.map(item => item.id === id && item.exit === undefined && item.market === market.id
@@ -262,7 +275,7 @@ export default function Terminal() {
   const backdrop = useMemo(() => ({ "--right-width": prefs.width + "px", "--bottom-max": prefs.bottomHeight + "px" } as CSSProperties), [prefs.width, prefs.bottomHeight]);
   const modalTitle = dialog === "markets" ? "Cari pasar" : dialog === "indicators" ? "Pustaka indikator" : dialog === "alerts" ? "Alert" : dialog === "news" ? "Berita & kalender" : dialog === "data" ? "Data Forex & logam" : "Pengaturan workspace";
   const timezoneName = timezones.find(zone => zone[0] === prefs.tz)?.[1] ?? "WIB";
-  const shortIndicators = indicators.filter(indicator => indicator.visible).slice(0,5);
+  const shortIndicators = indicators.slice(0, 8);
 
   return <div className={"terminal theme-" + prefs.theme + (wide ? " chart-only" : "")} style={backdrop}>
     <header className="topbar">
@@ -294,6 +307,8 @@ export default function Terminal() {
             <IconButton title="Perbesar chart" onClick={() => chart.current?.zoom(.7)}><Plus size={16}/></IconButton>
             <IconButton title="Perkecil chart" onClick={() => chart.current?.zoom(1.4)}><Minus size={16}/></IconButton>
             <IconButton title="Atur skala ulang" onClick={() => chart.current?.reset()}><RotateCcw size={15}/></IconButton>
+            <IconButton title={hideAllIndicators ? "Tampilkan semua indikator" : "Sembunyikan semua indikator"} onClick={() => setHideAllIndicators(value => !value)} active={hideAllIndicators}>{hideAllIndicators ? <EyeOff size={16}/> : <Activity size={16}/>}</IconButton>
+            <IconButton title={hideAllDrawings ? "Tampilkan semua drawing" : "Sembunyikan semua drawing"} onClick={() => setHideAllDrawings(value => !value)} active={hideAllDrawings}>{hideAllDrawings ? <EyeOff size={16}/> : <RectangleHorizontal size={16}/>}</IconButton>
             <IconButton title="Unduh gambar chart" onClick={() => chart.current?.capture()} disabled={!last}><Camera size={16}/></IconButton>
             <IconButton title={wide ? "Keluar dari layar penuh chart" : "Layar penuh chart"} onClick={() => setWide(value => !value)} active={wide}><Maximize size={16}/></IconButton>
           </div>
@@ -312,11 +327,13 @@ export default function Terminal() {
           <aside className="drawing-tools" aria-label="Alat gambar chart">
             {toolList.map(([id, Icon, label]) => <IconButton key={id} title={label} onClick={() => setTool(id)} active={tool === id}><Icon size={17} className={id === "vertical" ? "rotate-90" : ""}/></IconButton>)}
             <div className="drawing-separator"/>
+            <IconButton title="Kelola drawing (hapus / sembunyikan)" onClick={() => setShowDrawingsManager(value => !value)} active={showDrawingsManager}><Layers3 size={17}/></IconButton>
+            <IconButton title={hideAllDrawings ? "Tampilkan semua drawing" : "Sembunyikan semua drawing"} onClick={() => setHideAllDrawings(value => !value)} active={hideAllDrawings}>{hideAllDrawings ? <EyeOff size={17}/> : <Eye size={17}/>}</IconButton>
             <IconButton title="Batalkan gambar terakhir" onClick={undoDrawing} disabled={!listed.length}><Undo2 size={17}/></IconButton>
             <IconButton title="Muat riwayat lebih lama" onClick={() => void marketState.loadOlder()} disabled={!last || marketState.loadingHistory}><ScanLine size={17}/></IconButton>
           </aside>
           <div className="plot-wrap">
-            <Chart ref={chart} market={market} period={frames[frame as keyof typeof frames]} scene={chartKey} bars={marketState.bars} theme={prefs.theme} timezone={prefs.tz} type={prefs.view} bull={prefs.bull} bear={prefs.bear} indicators={indicatorState.rendered} drawings={listed} tool={tool} onDraw={addDrawing} onHover={setHoverBar}/>
+            <Chart ref={chart} market={market} period={frames[frame as keyof typeof frames]} scene={chartKey} bars={marketState.bars} theme={prefs.theme} timezone={prefs.tz} type={prefs.view} bull={prefs.bull} bear={prefs.bear} indicators={hideAllIndicators ? [] : indicatorState.rendered} drawings={hideAllDrawings ? [] : listed} tool={tool} onDraw={addDrawing} onChangeDrawing={changeDrawing} onHover={setHoverBar}/>
             <div className="chart-caption">
               <div className="chart-caption-title"><strong>{market.id}</strong><span>·</span><span>{frame}</span><span>·</span><span>{marketState.source || market.category}</span>
                 <span className={"feed-badge feed-" + marketState.status} title={marketState.message || labels[marketState.status]}>{live && <span className="status-dot"/>}{labels[marketState.status]}</span>
@@ -324,7 +341,17 @@ export default function Terminal() {
               <div className="ohlc" aria-label="Harga OHLC">
                 {([["O", observed?.open], ["H", observed?.high], ["L", observed?.low], ["C", observed?.close]] as const).map(([label, value]) => <span key={label}>{label} <b className={direction(observed && observed.close - observed.open)}>{number(value, market.precision)}</b></span>)}
               </div>
-              <div className="plot-labels">{shortIndicators.map(config => <span key={config.uid}><i style={{ background: config.color }}/>{byIndicator[config.kind]?.short ?? scripts.find(script => script.id === config.kind)?.name}{byIndicator[config.kind]?.length > 1 ? " " + config.length : ""}{config.frame ? " · " + config.frame : ""}</span>)}</div>
+              <div className="plot-labels" aria-label="Kontrol indikator di chart">{shortIndicators.map(config => {
+                const script = scripts.find(item => item.id === config.kind);
+                const name = byIndicator[config.kind]?.short ?? script?.name ?? config.kind;
+                return <span key={config.uid} className={"plot-chip" + (!config.visible || hideAllIndicators ? " muted" : "")}>
+                  <i style={{ background: config.color }}/><span className="plot-chip-name" title={name}>{name}{byIndicator[config.kind]?.length > 1 ? " " + config.length : ""}{config.frame ? " · " + config.frame : ""}</span>
+                  <button type="button" title={config.visible ? "Sembunyikan indikator" : "Tampilkan indikator"} aria-label={"Toggle " + name} onClick={() => updateIndicator(config.uid, {visible: !config.visible})}>{config.visible ? <Eye size={13}/> : <EyeOff size={13}/>}</button>
+                  <button type="button" title="Edit pengaturan indikator" aria-label={"Pengaturan " + name} onClick={() => settingsForIndicator(config.uid)}><Settings2 size={13}/></button>
+                  {script && <button type="button" title="Edit kode Pine" aria-label={"Edit kode " + name} onClick={() => showScript(script)}><Code2 size={13}/></button>}
+                  <button type="button" title="Hapus indikator" aria-label={"Hapus " + name} onClick={() => setIndicators(items => items.filter(item => item.uid !== config.uid))}><X size={13}/></button>
+                </span>;
+              })}</div>
             </div>
             {!last && <div className="chart-blank">
               <span className="chart-blank-icon">{marketState.status === "connecting" ? <Activity size={23}/> : <CandlestickChart size={24}/>}</span>
@@ -335,8 +362,18 @@ export default function Terminal() {
                 <button className="subtle-button" onClick={marketState.refresh}><RotateCcw size={14}/>Coba lagi</button>
               </div>}
             </div>}
+            {showDrawingsManager && <div className="drawing-manager-popup" role="dialog" aria-label="Kelola drawing">
+              <div className="drawing-manager-title"><strong>Drawing · {listed.length}</strong><button aria-label="Tutup kelola drawing" onClick={() => setShowDrawingsManager(false)}><X size={15}/></button></div>
+              {!listed.length && <p>Belum ada drawing.</p>}
+              {listed.map((drawing, index) => <div className="drawing-manager-item" key={drawing.id}>
+                <span>{index + 1}. {drawing.type}</span>
+                <button title={drawing.visible === false ? "Tampilkan" : "Sembunyikan"} aria-label={"Toggle drawing " + (index+1)} onClick={() => changeDrawing(drawing.id, {visible: drawing.visible === false})}>{drawing.visible === false ? <EyeOff size={15}/> : <Eye size={15}/>}</button>
+                <button title="Hapus" aria-label={"Hapus drawing " + (index+1)} onClick={() => changeDrawing(drawing.id, null)}><Trash2 size={15}/></button>
+              </div>)}
+              <button className="drawing-manager-all" onClick={() => setHideAllDrawings(value => !value)}>{hideAllDrawings ? "Tampilkan semua drawing" : "Sembunyikan semua drawing"}</button>
+            </div>}
             {marketState.loadingHistory && <div className="chart-toast">Memuat candle sebelumnya…</div>}
-            {tool !== "cursor" && last && <div className="chart-toast">{["horizontal","vertical"].includes(tool) ? "Ketuk chart untuk meletakkan garis." : "Pilih dua titik pada chart."}</div>}
+            {tool !== "cursor" && last && <div className="chart-toast">{["horizontal","vertical"].includes(tool) ? "Klik untuk menempatkan garis." : "Klik dua titik atau tahan lalu geser."}</div>}
             {last && <button className="live-jump icon-btn" aria-label="Ke candle terbaru" title="Ke candle terbaru" onClick={() => chart.current?.live()}><Activity size={15}/></button>}
           </div>
           {prefs.compare && !wide && <ComparisonChart {...prefs.compare} theme={prefs.theme} timezone={prefs.tz} provider={prefs.provider} type={prefs.view} bull={prefs.bull || "#39c89b"} bear={prefs.bear || "#ed7b89"}
@@ -359,7 +396,7 @@ export default function Terminal() {
             {lower === "editor" && <ScriptEditor runnerKey={runnerKey} onRunnerKey={setRunnerKey} requested={requested} scripts={scripts} onSave={saveScript} onRun={runScript} onStop={id => setIndicators(items => items.map(item => item.kind === id ? { ...item, visible: false } : item))} onDelete={id => {
               setScripts(items => items.filter(item => item.id !== id)); setIndicators(items => items.filter(item => item.kind !== id)); setRequested(null);
             }} onLog={onLog}/>}
-            {lower === "manager" && <IndicatorManager configs={indicators} scripts={scripts} stats={indicatorState.stats} onChange={updateIndicator} onRemove={uid => setIndicators(items => items.filter(item => item.uid !== uid))} timezone={prefs.tz}/>}
+            {lower === "manager" && <IndicatorManager focusUid={focusIndicator} configs={indicators} scripts={scripts} stats={indicatorState.stats} onChange={updateIndicator} onRemove={uid => setIndicators(items => items.filter(item => item.uid !== uid))} timezone={prefs.tz}/>}
             {lower === "paper" && <PaperPanel key={market.id} market={market} last={last} live={live} positions={positions} timezone={prefs.tz} onOpen={item => { setPositions(items => [...items, item]); tell("Posisi simulasi dibuka."); }} onClose={closePosition}/>}
             {lower === "test" && <BacktestPanel key={chartKey} bars={marketState.bars} market={market} frame={frame} timezone={prefs.tz}/>}
             {lower === "journal" && <JournalPanel positions={positions} note={note} onNote={setNote} timezone={prefs.tz}/>}
