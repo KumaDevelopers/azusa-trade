@@ -4,7 +4,7 @@ import { forwardRef, memo, useEffect, useImperativeHandle, useRef, useState } fr
 import type { PointerEvent as ReactPointerEvent } from "react";
 import { EyeOff, Pencil, Trash2, X } from "lucide-react";
 import { AreaSeries, BarSeries, CandlestickSeries, ColorType, CrosshairMode, HistogramSeries, LineSeries, LineStyle, createChart } from "lightweight-charts";
-import type { Coordinate, IChartApi, ISeriesApi, LogicalRange, SeriesType, Time, UTCTimestamp } from "lightweight-charts";
+import type { Coordinate, IChartApi, ISeriesApi, ITimeScaleApi, SeriesType, Time, UTCTimestamp } from "lightweight-charts";
 import type { Bar, DrawPoint, Drawing, Market, RenderedIndicator, Tool } from "../lib/types";
 import PineDrawingLayer from "./pine-drawing-layer";
 
@@ -23,6 +23,29 @@ const up = "#39c89b";
 const down = "#ed7b89";
 const color = (tone: string, opacity: number) => tone + Math.round(opacity / 100 * 255).toString(16).padStart(2,"0");
 const fill = (tone: string, opacity: number) => color(tone, opacity);
+
+function showRecent(scale: ITimeScaleApi<Time>, bars: Bar[]) {
+  const first = bars[0];
+  const last = bars.at(-1);
+  if (!first || !last) return;
+  const firstIndex = scale.timeToIndex(utc(first.time));
+  const lastIndex = scale.timeToIndex(utc(last.time));
+  if (firstIndex === null || lastIndex === null) return;
+  const compact = scale.width() < 600;
+  const count = compact ? 56 : 92;
+  scale.setVisibleLogicalRange({
+    from: Math.max(firstIndex, lastIndex - count + 1),
+    to: lastIndex + (compact ? 5 : 8),
+  });
+}
+
+function nearSegment(point: Coordinates, start: Coordinates, end: Coordinates, padding: number) {
+  const dx = end.x - start.x;
+  const dy = end.y - start.y;
+  const length = dx * dx + dy * dy;
+  const fraction = length ? Math.min(1, Math.max(0, ((point.x - start.x) * dx + (point.y - start.y) * dy) / length)) : 0;
+  return Math.hypot(point.x - start.x - fraction * dx, point.y - start.y - fraction * dy) <= padding;
+}
 
 export default memo(forwardRef<ChartApi, ChartProps>(function Chart(props, ref) {
   const { market, period, scene, bars, type, theme, timezone, indicators, drawings, tool, bull = up, bear = down } = props;
@@ -43,7 +66,6 @@ export default memo(forwardRef<ChartApi, ChartProps>(function Chart(props, ref) 
   latest.current = props;
   const lastSeries = useRef<{ bars: Bar[]; scene: string; type: ViewMode } | null>(null);
   const currentBars = useRef(new Map<number, Bar>());
-  const originalRange = useRef<LogicalRange | null>(null);
   const drawFrame = useRef(0);
   const themeIsLight = theme === "light";
 
@@ -56,11 +78,15 @@ export default memo(forwardRef<ChartApi, ChartProps>(function Chart(props, ref) 
       timeScale: { borderColor: "#293340", rightOffset: 8, timeVisible: true, secondsVisible: false, minBarSpacing: 1.2, barSpacing: 9 },
       crosshair: { mode: CrosshairMode.Normal, vertLine: { color: "#6b7b90", style: LineStyle.Dashed, labelBackgroundColor: "#334256" }, horzLine: { color: "#6b7b90", style: LineStyle.Dashed, labelBackgroundColor: "#334256" } },
       localization: { locale: "id-ID" },
-      handleScroll: { mouseWheel: true, pressedMouseMove: true, horzTouchDrag: true, vertTouchDrag: false },
+      handleScroll: { mouseWheel: true, pressedMouseMove: true, horzTouchDrag: true, vertTouchDrag: true },
+      handleScale: { mouseWheel: true, pinch: true, axisPressedMouseMove: true, axisDoubleClickReset: true },
+      kineticScroll: { mouse: false, touch: true },
     });
     api.current = chart;
     const repaint = () => {
       if (drawFrame.current) return;
+      const { drawings, indicators, tool } = latest.current;
+      if (!drawings.length && tool === "cursor" && !indicators.some(item => item.config.visible && item.visuals)) return;
       drawFrame.current = requestAnimationFrame(() => { drawFrame.current = 0; setLayout(value => value + 1); });
     };
     chart.timeScale().subscribeVisibleLogicalRangeChange(repaint);
@@ -68,12 +94,34 @@ export default memo(forwardRef<ChartApi, ChartProps>(function Chart(props, ref) 
       latest.current.onHover(typeof event.time === "number" ? currentBars.current.get(event.time) || null : null);
       if (latest.current.tool !== "cursor") setPointer(event.point ?? null);
     });
+    // Select after a chart click so pointer-down and touch gestures can reach the canvas.
+    chart.subscribeClick(event => {
+      if (latest.current.tool !== "cursor" || event.paneIndex !== 0 || !event.point) return;
+      const id = findDrawing(event.point);
+      setSelectedId(id);
+      setEditingId(current => current === id ? current : null);
+    });
     const resize = new ResizeObserver(repaint);
     const node = canvas.current;
     resize.observe(node);
     node.addEventListener("wheel", repaint, { passive: true });
     node.addEventListener("pointerup", repaint);
-    return () => { resize.disconnect(); node.removeEventListener("wheel", repaint); node.removeEventListener("pointerup", repaint); cancelAnimationFrame(drawFrame.current); chart.remove(); api.current = null; main.current = null; overlays.current.clear(); };
+    function repaintDuringDrag(event: PointerEvent) {
+      if (event.buttons & 1) repaint();
+    }
+    node.addEventListener("pointermove", repaintDuringDrag, { passive: true });
+    return () => {
+      resize.disconnect();
+      node.removeEventListener("wheel", repaint);
+      node.removeEventListener("pointerup", repaint);
+      node.removeEventListener("pointermove", repaintDuringDrag);
+      cancelAnimationFrame(drawFrame.current);
+      drawFrame.current = 0;
+      chart.remove();
+      api.current = null;
+      main.current = null;
+      overlays.current.clear();
+    };
   }, []);
 
   useEffect(() => {
@@ -121,7 +169,6 @@ export default memo(forwardRef<ChartApi, ChartProps>(function Chart(props, ref) 
     const same = last?.scene === scene && last.type === type;
     const transform = (value: Bar) => type === "line" || type === "area" ? { time: utc(value.time), value: value.close } : { ...value, time: utc(value.time), volume: undefined };
     const line = chart.timeScale();
-    const currentRange = line.getVisibleLogicalRange();
     if (bar && previous && same && last.bars[0]?.time === bars[0]?.time && previous.time === bar.time && last.bars.length === bars.length
       && last.bars.at(-2) === bars.at(-2)) {
       series.update(transform(bar));
@@ -132,16 +179,30 @@ export default memo(forwardRef<ChartApi, ChartProps>(function Chart(props, ref) 
       series.update(transform(bar));
       currentBars.current.set(bar.time, bar);
     } else {
+      const range = same && last.bars.length && bars.length ? line.getVisibleLogicalRange() : null;
+      const oldFirst = last?.bars[0];
+      const oldLastIndex = previous ? line.timeToIndex(utc(previous.time)) : null;
+      const followsNewBar = !!(range && bar && previous && bar.time > previous.time
+        && oldLastIndex !== null && range.from <= oldLastIndex && range.to >= oldLastIndex);
+      let anchor: Bar | undefined;
+      let anchorBefore: number | null = null;
+      if (range && last && oldFirst && !followsNewBar && oldFirst.time !== bars[0].time) {
+        const firstIndex = line.timeToIndex(utc(oldFirst.time)) ?? 0;
+        const position = Math.round((range.from + range.to) / 2) - firstIndex;
+        anchor = last.bars[Math.max(0, Math.min(last.bars.length - 1, position))];
+        anchorBefore = line.timeToIndex(utc(anchor.time));
+      }
+
       series.setData(bars.map(transform));
       currentBars.current = new Map(bars.map(value => [value.time, value]));
-      if (bars.length && (!same || !last?.bars.length)) {
-        const windowSize = (canvas.current?.clientWidth || 840) < 600 ? 56 : 92;
-        const visible = { from: Math.max(0, bars.length - windowSize), to: bars.length + 7 } as LogicalRange;
-        line.setVisibleLogicalRange(visible);
-        originalRange.current = visible;
-      } else if (same && currentRange && last?.bars[0]?.time && bars[0]?.time < last.bars[0].time) {
-        const added = bars.findIndex(value => value.time === last.bars[0].time);
-        if (added > 0) line.setVisibleLogicalRange({ from: currentRange.from + added, to: currentRange.to + added });
+      if (bars.length && (!same || !last.bars.length)) {
+        showRecent(line, bars);
+      } else if (range && anchor && anchorBefore !== null) {
+        const anchorAfter = line.timeToIndex(utc(anchor.time));
+        if (anchorAfter !== null) {
+          const shift = anchorAfter - anchorBefore;
+          line.setVisibleLogicalRange({ from: range.from + shift, to: range.to + shift });
+        }
       }
     }
     lastSeries.current = { bars, scene, type };
@@ -240,11 +301,38 @@ export default memo(forwardRef<ChartApi, ChartProps>(function Chart(props, ref) 
     if (x === null && latest.current.bars.length) {
       const source = latest.current.bars;
       const last = source[source.length - 1];
-      const logical = source.length - 1 + (point.time - last.time) / period;
+      const logical = source.length - 1 + (point.time - last.time) / latest.current.period;
       x = chart.timeScale().logicalToCoordinate(logical as import("lightweight-charts").Logical);
     }
     return x === null || y === null ? null : { x: Number(x), y: Number(y) };
   }
+  function findDrawing(point: Coordinates) {
+    const list = latest.current.drawings;
+    for (let index = list.length - 1; index >= 0; index--) {
+      const drawing = list[index];
+      if (drawing.visible === false) continue;
+      const a = position(drawing.points[0]);
+      if (!a) continue;
+      if (drawing.type === "horizontal") {
+        if (Math.abs(point.y - a.y) <= 8) return drawing.id;
+        continue;
+      }
+      if (drawing.type === "vertical") {
+        if (Math.abs(point.x - a.x) <= 8) return drawing.id;
+        continue;
+      }
+      const b = drawing.points[1] && position(drawing.points[1]);
+      if (!b) continue;
+      if (drawing.type === "trend" || drawing.type === "measure") {
+        if (nearSegment(point, a, b, 9)) return drawing.id;
+      } else if (point.x >= Math.min(a.x, b.x) - 7 && point.x <= Math.max(a.x, b.x) + 7
+        && point.y >= Math.min(a.y, b.y) - 7 && point.y <= Math.max(a.y, b.y) + 7) {
+        return drawing.id;
+      }
+    }
+    return null;
+  }
+
   // The overlay consumes pointer gestures only while a drawing tool is selected.
   // Clicking twice and pressing/dragging both produce the same two-point shape.
   function pointerCoordinates(event: ReactPointerEvent<SVGSVGElement>): Coordinates {
@@ -337,7 +425,12 @@ export default memo(forwardRef<ChartApi, ChartProps>(function Chart(props, ref) 
     } else setPending(target);
   }
   useImperativeHandle(ref, () => ({
-    reset() { if (originalRange.current) api.current?.timeScale().setVisibleLogicalRange(originalRange.current); },
+    reset() {
+      const chart = api.current;
+      if (!chart) return;
+      chart.priceScale("right").applyOptions({ autoScale: true });
+      showRecent(chart.timeScale(), latest.current.bars);
+    },
     fit() { api.current?.timeScale().fitContent(); },
     live() { api.current?.timeScale().scrollToRealTime(); },
     zoom(factor) {
@@ -368,13 +461,10 @@ export default memo(forwardRef<ChartApi, ChartProps>(function Chart(props, ref) 
     const selected = selectedId === drawing.id;
     const style = { stroke: selected ? "#f2d184" : "#7fbcf9", strokeWidth: selected ? 2.4 : 1.4 };
     let shape;
-    let hit;
     if (drawing.type === "horizontal") {
       shape = <><line {...style} x1="0" x2={width - 74} y1={a.y} y2={a.y} strokeDasharray="5 4"/><text x="12" y={a.y - 5}>{drawing.points[0].price.toFixed(market.precision)}</text></>;
-      hit = <line x1="0" x2={width - 74} y1={a.y} y2={a.y} stroke="transparent" strokeWidth="16" pointerEvents="stroke"/>;
     } else if (drawing.type === "vertical") {
       shape = <line {...style} x1={a.x} x2={a.x} y1="0" y2={height} strokeDasharray="5 4"/>;
-      hit = <line x1={a.x} x2={a.x} y1="0" y2={height} stroke="transparent" strokeWidth="16" pointerEvents="stroke"/>;
     } else if (b) {
       const x = Math.min(a.x, b.x), w = Math.max(1, Math.abs(a.x - b.x));
       const y = Math.min(a.y, b.y), h = Math.max(1, Math.abs(a.y - b.y));
@@ -389,21 +479,8 @@ export default memo(forwardRef<ChartApi, ChartProps>(function Chart(props, ref) 
         const yTarget = a.y + (a.y - b.y) * 2;
         shape = <><rect x={x} y={y} width={w} height={h} fill="#ed7b8938" stroke={down}/><rect x={x} y={Math.min(yTarget,a.y)} width={w} height={Math.abs(yTarget-a.y)} fill="#39c89b30" stroke={up}/><text x={x+5} y={a.y-5}>R/R 2.00</text></>;
       }
-      hit = drawing.type === "trend" || drawing.type === "measure"
-        ? <line x1={a.x} x2={b.x} y1={a.y} y2={b.y} stroke="transparent" strokeWidth="18" pointerEvents="stroke"/>
-        : <rect x={x} y={y} width={w} height={h} fill="transparent" stroke="transparent" strokeWidth="14" pointerEvents="all"/>;
     }
-    if (!shape) return null;
-    return <g key={drawing.id} className={selected ? "drawing-selected" : "drawing-selectable"} onPointerDown={event => {
-      if (tool !== "cursor") return;
-      event.stopPropagation();
-      event.preventDefault();
-      if (selectedId !== drawing.id) setEditingId(null);
-      setSelectedId(drawing.id);
-    }}>
-      {shape}
-      {tool === "cursor" && hit}
-    </g>;
+    return shape ? <g key={drawing.id}>{shape}</g> : null;
   }
   const selected = drawings.find(item => item.id === selectedId && item.visible !== false);
   const activeSelected = selected && editPreview?.id === selected.id ? { ...selected, points: editPreview.points } : selected;
@@ -434,6 +511,8 @@ export default memo(forwardRef<ChartApi, ChartProps>(function Chart(props, ref) 
       onPointerMove={moveDrawing}
       onPointerUp={event => { if (!finishEdit(event)) endDrawing(event); }}
       onPointerCancel={() => { gesture.current = null; editGesture.current = null; setEditPreview(null); setDragStart(null); }}>
+      {tool !== "cursor" && <rect className="drawing-input-area" width={api.current?.timeScale().width() ?? 0}
+        height={chartHeight(api.current, canvas.current)} fill="transparent" />}
       {drawings.map(item => visual(editPreview?.id === item.id ? { ...item, points: editPreview.points } : item))}
       {previewDrawing && <g className="drawing-preview" pointerEvents="none">{visual(previewDrawing)}</g>}
       {editingId && activeSelected?.id === editingId && activeSelected.points.map((point, index) => {

@@ -304,9 +304,6 @@ export default function Terminal() {
           <div className="tool-divider"/>
           <label title="Jenis chart" className="chart-type"><CandlestickChart size={17}/><select aria-label="Jenis chart" value={prefs.view} onChange={event => set({ view: event.target.value as ViewMode })}>{Object.entries(chartViews).map(([key, value]) => <option key={key} value={key}>{value}</option>)}</select><ChevronDown size={13}/></label>
           <div className="chart-actions">
-            <IconButton title="Perbesar chart" onClick={() => chart.current?.zoom(.7)}><Plus size={16}/></IconButton>
-            <IconButton title="Perkecil chart" onClick={() => chart.current?.zoom(1.4)}><Minus size={16}/></IconButton>
-            <IconButton title="Atur skala ulang" onClick={() => chart.current?.reset()}><RotateCcw size={15}/></IconButton>
             <IconButton title={hideAllIndicators ? "Tampilkan semua indikator" : "Sembunyikan semua indikator"} onClick={() => setHideAllIndicators(value => !value)} active={hideAllIndicators}>{hideAllIndicators ? <EyeOff size={16}/> : <Activity size={16}/>}</IconButton>
             <IconButton title={hideAllDrawings ? "Tampilkan semua drawing" : "Sembunyikan semua drawing"} onClick={() => setHideAllDrawings(value => !value)} active={hideAllDrawings}>{hideAllDrawings ? <EyeOff size={16}/> : <RectangleHorizontal size={16}/>}</IconButton>
             <IconButton title="Unduh gambar chart" onClick={() => chart.current?.capture()} disabled={!last}><Camera size={16}/></IconButton>
@@ -371,6 +368,11 @@ export default function Terminal() {
                 <button title="Hapus" aria-label={"Hapus drawing " + (index+1)} onClick={() => changeDrawing(drawing.id, null)}><Trash2 size={15}/></button>
               </div>)}
               <button className="drawing-manager-all" onClick={() => setHideAllDrawings(value => !value)}>{hideAllDrawings ? "Tampilkan semua drawing" : "Sembunyikan semua drawing"}</button>
+            </div>}
+            {last && <div className="chart-zoom-controls" role="group" aria-label="Zoom chart">
+              <IconButton title="Perbesar chart" onClick={() => chart.current?.zoom(.7)}><Plus size={17}/></IconButton>
+              <IconButton title="Perkecil chart" onClick={() => chart.current?.zoom(1.4)}><Minus size={17}/></IconButton>
+              <IconButton title="Atur skala ulang" onClick={() => chart.current?.reset()}><RotateCcw size={15}/></IconButton>
             </div>}
             {marketState.loadingHistory && <div className="chart-toast">Memuat candle sebelumnya…</div>}
             {tool !== "cursor" && last && <div className="chart-toast">{["horizontal","vertical"].includes(tool) ? "Klik untuk menempatkan garis." : "Klik dua titik atau tahan lalu geser."}</div>}

@@ -144,6 +144,9 @@ kbd { font-size: .67rem; color: var(--dim); border: 1px solid var(--border); bor
 .drawing-separator { height: 1px; width: 22px; background: var(--border); margin: 3px 0; flex: 0 0 auto; }
 .plot-wrap { min-width: 0; min-height: 0; position: relative; background: var(--chart); overflow: hidden; }
 .chart-frame, .chart-canvas { position: absolute; inset: 0; }
+.chart-canvas { touch-action: none; overscroll-behavior: contain; }
+.chart-zoom-controls { position: absolute; z-index: 4; left: 12px; bottom: 39px; display: flex; padding: 2px; gap: 1px; border-radius: 7px; border: 1px solid var(--border); background: var(--raised); }
+.chart-zoom-controls .icon-btn { color: var(--text); }
 .chart-drawings { position: absolute; inset: 0; z-index: 2; width: 100%; height: 100%; pointer-events: none; }
 .chart-drawings text { fill: var(--text); font-size: 11px; }
 .chart-frame:not(.draw-cursor) { cursor: crosshair; }
@@ -323,7 +326,6 @@ label input, label select, label textarea { width: 100%; }
 @media (max-width: 1120px) {
   .market-metrics div:nth-child(3) { display: none; }
   .market-strip { gap: 16px; }
-  .chart-actions .icon-btn:nth-child(1), .chart-actions .icon-btn:nth-child(2) { display: none; }
 }
 @media (max-width: 930px) {
   .market-metrics div:nth-child(2) { display: none; }
@@ -356,8 +358,8 @@ label input, label select, label textarea { width: 100%; }
   .time-overflow select.current { width: 31px; margin-left: -3px; font-size: .69rem; }
   .chart-type { padding: 4px 2px; width: 31px; }
   .chart-actions .icon-btn { width: 26px; }
-  .chart-actions .icon-btn:nth-child(3), .chart-actions .icon-btn:nth-child(4) { display: none; }
-  .chart-only .chart-actions .icon-btn:nth-child(4) { display: inline-flex; }
+  .chart-zoom-controls { left: 7px; bottom: 36px; }
+  .chart-zoom-controls .icon-btn { width: 40px; height: 40px; }
   .market-strip { min-height: 71px; padding: 8px 9px; gap: 10px; }
   .market-main { gap: 7px; min-width: min-content; }
   .market-main .asset-icon { width: 31px; height: 31px; font-size: .85rem; }
@@ -447,10 +449,7 @@ label input, label select, label textarea { width: 100%; }
 .compile-message summary { cursor: pointer; }
 
 /* Chart interactions: draw by dragging or two clicks, and select existing drawings. */
-.chart-drawings.drawing-mode { pointer-events: auto; touch-action: none; cursor: crosshair; }
-.chart-drawings .drawing-selectable, .chart-drawings .drawing-selected { pointer-events: none; }
-.chart-drawings .drawing-selectable [pointer-events], .chart-drawings .drawing-selected [pointer-events] { pointer-events: all; cursor: pointer; }
-.chart-drawings .drawing-selected [pointer-events] { cursor: pointer; }
+.chart-drawings .drawing-input-area { pointer-events: all; touch-action: none; cursor: crosshair; }
 /* Floating icon toolbar follows the selected shape, not a fixed chart corner. */
 .drawing-preview { opacity: .92; }
 .drawing-preview line, .drawing-preview rect { stroke-dasharray: 5 3; stroke-width: 2px; }
@@ -459,8 +458,7 @@ label input, label select, label textarea { width: 100%; }
 .drawing-selection-menu button { width: 30px; height: 30px; display: inline-grid; place-items: center; border-radius: 6px; color: var(--muted); }
 .drawing-selection-menu button:hover, .drawing-selection-menu button.active { color: var(--accent); background: var(--hover); }
 .drawing-selection-menu button.danger:hover { color: var(--negative); background: var(--hover); }
-.plot-labels { pointer-events: auto; }
-.plot-chip { display: inline-flex; align-items: center; min-width: 0; gap: 5px; border-radius: 5px; padding: 2px 4px; background: color-mix(in srgb, var(--raised) 65%, transparent); }
+.plot-chip { pointer-events: auto; display: inline-flex; align-items: center; min-width: 0; gap: 5px; border-radius: 5px; padding: 2px 4px; background: color-mix(in srgb, var(--raised) 65%, transparent); }
 .plot-chip.muted { opacity: .55; }
 .plot-chip-name { display: inline-block; white-space: nowrap; max-width: 128px; overflow: hidden; text-overflow: ellipsis; }
 .plot-chip button { display: inline-flex; width: 19px; height: 19px; justify-content: center; align-items: center; border-radius: 4px; color: var(--muted); }

@@ -1,5 +1,6 @@
 "use client";
 
+import { useMemo } from "react";
 import type { ReactNode } from "react";
 import type { IChartApi, ISeriesApi, SeriesType, UTCTimestamp, Logical } from "lightweight-charts";
 import type { Bar, PineVisuals, RenderedIndicator } from "../lib/types";
@@ -28,11 +29,11 @@ const yIsPrice = (yloc?: string) => !yloc || yloc === "pr" || yloc === "price" |
 const asTime = (ms: number) => Math.floor(ms / 1000) as UTCTimestamp;
 
 function Layer({ chart, series, bars, indicators, width, height }: Props) {
+  const atTime = useMemo(() => new Map(bars.map((bar, index) => [bar.time, index])), [bars]);
   if (!chart || !series || !bars.length || width < 50 || height < 50) return null;
   const visible = indicators.filter(i => i?.config?.visible && i.visuals);
   if (!visible.length) return null;
   const scale = chart.timeScale();
-  const atTime = new Map(bars.map((bar, index) => [bar.time, index]));
   const resolveX = (n: number, xloc: string | undefined, visuals: PineVisuals) => {
     if (!num(n)) return null;
     if (xIsTime(xloc)) {
