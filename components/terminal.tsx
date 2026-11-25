@@ -3,9 +3,10 @@
 import dynamic from "next/dynamic";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
-import { Activity, Bell, CandlestickChart, Camera, ChevronDown, CircleHelp, Code2, Crosshair, Eye, EyeOff, Trash2, FlaskConical, Globe2, GripHorizontal, Layers3, LayoutPanelLeft, List, Maximize, Minus, MoveHorizontal, MoveUpRight, Newspaper, PanelBottom, PanelRight, Plus, RectangleHorizontal, RotateCcw, Ruler, ScanLine, Search, Settings2, SlidersHorizontal, Star, Terminal as TerminalIcon, TrendingUp, Undo2, Wifi, X } from "lucide-react";
+import { Activity, Bell, CandlestickChart, Camera, ChevronDown, CircleHelp, Code2, Crosshair, Eye, EyeOff, Trash2, FlaskConical, Globe2, GripHorizontal, Layers3, LayoutPanelLeft, List, Maximize, Minus, MoveHorizontal, MoveUpRight, Newspaper, PanelBottom, PanelRight, Plus, RectangleHorizontal, RotateCcw, Ruler, ScanLine, Search, Settings2, SlidersHorizontal, Star, Terminal as TerminalIcon, TrendingUp, Undo2, UserRound, Wifi, X } from "lucide-react";
 import Chart from "./chart";
 import WorkspaceBackup from "./workspace-backup";
+import { AdminPanel, useAdminWorkspace } from "./admin-workspace";
 import type { ChartApi, ViewMode } from "./chart";
 import { AssetIcon, CalendarPanel, MarketDataSetup, MarketPicker, NewsPanel, Watchlist, direction, number, signed, stamp } from "./market-panels";
 import { useMarket, useQuotes } from "./use-market";
@@ -42,7 +43,7 @@ const timezones = [ ["Asia/Jakarta", "WIB"], ["UTC", "UTC"], ["America/New_York"
 const frameNames = Object.keys(frames);
 const marketIds = markets.map(market => market.id);
 type Lower = typeof lowerTabs[number][0];
-type Dialog = "markets" | "indicators" | "alerts" | "settings" | "news" | "data" | null;
+type Dialog = "markets" | "indicators" | "alerts" | "settings" | "news" | "data" | "admin" | null;
 type Preferences = { compare?: { symbol: string; frame: string }; bull?: string; bear?: string; symbol: string; frame: string; theme: string; tz: string; view: ViewMode; side: boolean; width: number; bottomHeight: number; provider: "auto" | "binance" | "okx" };
 const noDrawings: Drawing[] = [];
 const initial: Preferences = { symbol: "BTCUSDT", frame: "15m", theme: "dark", tz: "Asia/Jakarta", view: "candles", side: true, width: 324, bottomHeight: 335, provider: "auto" };
@@ -119,8 +120,11 @@ export default function Terminal() {
   }, []);
   const set = (patch: Partial<Preferences>) => setPrefs(previous => ({ ...previous, ...patch }));
 
-  const snapshot = () => ({ version: 1, prefs, savedLayouts, indicators, scripts, favorites, recent, drawings, alerts, positions, note });
-  function restoreWorkspace(data: ReturnType<typeof snapshot>) {
+  const snapshot = useMemo(() => ({
+    version: 1, prefs, savedLayouts, indicators, scripts, favorites, recent, drawings, alerts, positions, note,
+    hideAllIndicators, hideAllDrawings,
+  }), [prefs, savedLayouts, indicators, scripts, favorites, recent, drawings, alerts, positions, note, hideAllIndicators, hideAllDrawings]);
+  function restoreWorkspace(data: typeof snapshot) {
     if (!data || data.version !== 1 || !data.prefs || !byId[data.prefs.symbol]
       || !Number.isFinite(data.prefs.width) || !Number.isFinite(data.prefs.bottomHeight)
       || !timezones.some(zone => zone[0] === data.prefs.tz) || !Object.hasOwn(chartViews, data.prefs.view)
@@ -139,7 +143,10 @@ export default function Terminal() {
     setAlerts(data.alerts);
     setPositions(data.positions);
     setNote(data.note);
+    if (typeof data.hideAllIndicators === "boolean") setHideAllIndicators(data.hideAllIndicators);
+    if (typeof data.hideAllDrawings === "boolean") setHideAllDrawings(data.hideAllDrawings);
   }
+  const admin = useAdminWorkspace(snapshot, restoreWorkspace, ready && scriptsReady);
 
   const selectMarket = (item: Market, close = false) => {
     if (market.id !== item.id) {
@@ -273,7 +280,7 @@ export default function Terminal() {
   }, [indicatorState.stats, onLog]);
 
   const backdrop = useMemo(() => ({ "--right-width": prefs.width + "px", "--bottom-max": prefs.bottomHeight + "px" } as CSSProperties), [prefs.width, prefs.bottomHeight]);
-  const modalTitle = dialog === "markets" ? "Cari pasar" : dialog === "indicators" ? "Pustaka indikator" : dialog === "alerts" ? "Alert" : dialog === "news" ? "Berita & kalender" : dialog === "data" ? "Data Forex & logam" : "Pengaturan workspace";
+  const modalTitle = dialog === "markets" ? "Cari pasar" : dialog === "indicators" ? "Pustaka indikator" : dialog === "alerts" ? "Alert" : dialog === "news" ? "Berita & kalender" : dialog === "data" ? "Data Forex & logam" : dialog === "admin" ? "Akun admin" : "Pengaturan workspace";
   const timezoneName = timezones.find(zone => zone[0] === prefs.tz)?.[1] ?? "WIB";
   const shortIndicators = indicators.slice(0, 8);
 
@@ -455,7 +462,12 @@ export default function Terminal() {
         {dialog === "alerts" && <AlertsPanel key={market.id + frame} alerts={alerts} market={market} timeframe={frame} plots={alertPlots} current={last?.close} timezone={prefs.tz} onAdd={item => { setAlerts(value => [...value,item]); tell("Alert " + item.symbol + " dibuat."); }} onRemove={id => setAlerts(value => value.filter(item => item.id !== id))}/>}
         {dialog === "news" && <><div className="category-filters mobile-news-tabs"><button className={mobileEditorial === "news" ? "selected" : ""} onClick={() => setMobileEditorial("news")}>Berita</button><button className={mobileEditorial === "calendar" ? "selected" : ""} onClick={() => setMobileEditorial("calendar")}>Kalender ekonomi</button></div>{mobileEditorial === "news" ? <NewsPanel timezone={prefs.tz}/> : <CalendarPanel timezone={prefs.tz}/>}</>}
         {dialog === "data" && <MarketDataSetup market={usesBiquote ? market : byId.XAUUSD} frame={usesBiquote ? frame : "15m"}/>}
+        {dialog === "admin" && <AdminPanel admin={admin}/>}
         {dialog === "settings" && <div className="settings">
+          <div className="settings-actions admin-settings-action">
+            <button className="subtle-button" onClick={() => setDialog("admin")}><UserRound size={15}/>Akun admin</button>
+            {admin.session?.user && <span className="secondary">Masuk sebagai admin</span>}
+          </div>
           <div className="settings-form">
             <label>Tema<select value={prefs.theme} onChange={event => set({ theme: event.target.value })}><option value="dark">Gelap</option><option value="light">Terang</option></select></label>
             <label>Zona waktu<select value={prefs.tz} onChange={event => set({ tz: event.target.value })}>{timezones.map(([value, title]) => <option key={value} value={value}>{title}</option>)}</select></label>
@@ -474,7 +486,7 @@ export default function Terminal() {
             <label>Pilih layout<select value={layoutChoice} onChange={event => setLayoutChoice(event.target.value)}><option value="">Pilih…</option>{Object.keys(savedLayouts).map(value => <option key={value}>{value}</option>)}</select></label>
             <button className="subtle-button" disabled={!Object.hasOwn(savedLayouts, layoutChoice)} onClick={() => { const item = savedLayouts[layoutChoice]; setPrefs(item.preferences); setIndicators(item.indicators.filter(config => byIndicator[config.kind] || scripts.some(script => script.id === config.kind))); tell("Layout " + layoutChoice + " dipulihkan."); }}>Pulihkan</button>
           </div>
-          {scriptsReady && <WorkspaceBackup snapshot={snapshot} onRestore={restoreWorkspace} tell={tell}/>}
+          {scriptsReady && <WorkspaceBackup snapshot={() => snapshot} onRestore={restoreWorkspace} tell={tell}/>}
           <div className="settings-actions"><button className="subtle-button" onClick={() => download("AzusaTrade-workspace.json", JSON.stringify({ settings: prefs, indicators, scripts, favorites, drawings }, null, 2), "application/json")}>Ekspor workspace</button>
             <button className="subtle-button" onClick={() => { setDialog(null); setLower("paper"); }}>Paper Trading</button><button className="subtle-button" onClick={() => { setDialog(null); setLower("test"); }}>Backtest</button></div>
         </div>}

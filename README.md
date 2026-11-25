@@ -34,10 +34,13 @@ npx vercel --prod
 | **Tanpa API key** | Forex dan Metals menggunakan biquote MT5 (REST OHLC + SignalR WebSocket). Harga bergantung sumber broker biquote, bukan harga referensi universal. |
 | Streaming Forex | SignalR langsung dari browser ke `https://biquote.io/hubs/tick`. Tidak diperlukan relay, WebSocket server Vercel, atau key. |
 | `TRADING_ECONOMICS_API_KEY` | Berita pasar dan kalender berlisensi. Kolom actual, forecast, previous, dan impact mengikuti data penyedia. Refresh berita dan kalender berlangsung berkala. |
-| `DATABASE_URL` | Pasang Neon untuk proyek ini melalui Vercel Marketplace. Jalankan `db/schema.sql` di Neon untuk mengaktifkan backup dan pemulihan dari menu Pengaturan. |
+| `DATABASE_URL` | Pasang Neon untuk proyek ini melalui Vercel Marketplace. Jalankan `db/schema.sql` di Neon untuk mengaktifkan backup dan sinkronisasi admin. |
+| `AZUSA_ADMIN_PASSWORD_HASH` | Hash password untuk akun `admin`. Buat dengan `node scripts/admin-password.mjs`, lalu simpan sebagai variabel rahasia di Vercel dan redeploy. |
 | `JUDGE0_URL`, `JUDGE0_AUTH_TOKEN`, `JUDGE0_C_LANGUAGE_ID`, `JUDGE0_JAVA_LANGUAGE_ID`, `RUNNER_ACCESS_KEY` | Compiler C dan Java opsional. Gunakan URL HTTPS, token API, dan ID bahasa dari instans Judge0 terisolasi. |
 
 Anggap kunci pemulihan Neon sebagai kredensial. Backup dipicu dari menu Pengaturan. Setiap simpan memeriksa revisi sehingga satu perangkat tidak menimpa backup yang telah diperbarui perangkat lain. Library script lokal memakai IndexedDB tanpa batas jumlah dari aplikasi. Ukuran transfer snapshot mengikuti batas HTTP Vercel.
+
+Untuk sinkronisasi otomatis, buka **Setelan → Akun admin**. Login pertama mengunggah workspace perangkat tersebut jika Neon masih kosong. Tunggu status **Tersinkron ke Neon** sebelum membuka perangkat lain. Login berikutnya memuat workspace dari Neon, termasuk layout, favorit, indikator dan script, gambar chart, alert, paper trading, dan catatan. Jika dua perangkat mengubah revisi yang sama, perubahan cloud bisa diambil dari menu akun.
 
 ### Forex, emas dan perak (biquote, tanpa API key)
 

@@ -290,6 +290,16 @@ label input, label select, label textarea { width: 100%; }
 .secondary { color: var(--muted); font-size: .77rem; line-height: 1.45; }
 .settings h3 { margin: 17px 0 10px; }
 .settings-actions, .action-row { display: flex; align-items: center; flex-wrap: wrap; gap: 9px; margin: 9px 0; }
+.admin-settings-action { margin-top: 0; margin-bottom: 14px; }
+.modal-admin { width: min(100%, 390px); }
+.admin-panel.form-grid { grid-template-columns: minmax(0, 1fr); margin: 0; }
+.admin-panel label[for="azusa-admin-password"] { margin-bottom: -4px; }
+.admin-password { position: relative; }
+.admin-password input { width: 100%; min-height: 44px; padding-right: 47px; }
+.admin-password button { position: absolute; inset: 0 0 0 auto; width: 44px; height: 44px; }
+.admin-panel.form-grid > button { min-height: 39px; }
+.admin-panel [role="alert"] { font-size: .8rem; }
+.admin-status { display: flex; align-items: center; flex-wrap: wrap; gap: 5px 11px; font-size: .8rem; }
 .action-row { justify-content: space-between; }
 .segmented { display: flex; gap: 4px; }
 .trade-row, .alert-row { display: flex; align-items: center; gap: 11px; padding: 9px 0; border-bottom: 1px solid var(--border-soft); font-size: .8rem; }
