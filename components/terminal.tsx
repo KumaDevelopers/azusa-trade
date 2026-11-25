@@ -9,7 +9,9 @@ import WorkspaceBackup from "./workspace-backup";
 import { AdminPanel, useAdminWorkspace } from "./admin-workspace";
 import type { ChartApi, ViewMode } from "./chart";
 import { AssetIcon, CalendarPanel, MarketDataSetup, MarketPicker, NewsPanel, Watchlist, direction, number, signed, stamp } from "./market-panels";
-import { useMarket, useQuotes } from "./use-market";
+import { useQuotes } from "./use-market";
+import { MarketTabFeeds, MarketTabs, MAX_MARKET_TABS, normalizeMarketTabs, useMarketTabsFeed } from "./market-tabs";
+import type { MarketTab } from "./market-tabs";
 import { useIndicators } from "./use-indicators";
 import { download, usePersisted, useScripts } from "./use-persisted";
 import { catalog, byIndicator, DEFAULT_INDICATORS, MAX_ACTIVE, PALETTE } from "../lib/indicators.mjs";
@@ -43,8 +45,8 @@ const timezones = [ ["Asia/Jakarta", "WIB"], ["UTC", "UTC"], ["America/New_York"
 const frameNames = Object.keys(frames);
 const marketIds = markets.map(market => market.id);
 type Lower = typeof lowerTabs[number][0];
-type Dialog = "markets" | "indicators" | "alerts" | "settings" | "news" | "data" | "admin" | null;
-type Preferences = { compare?: { symbol: string; frame: string }; bull?: string; bear?: string; symbol: string; frame: string; theme: string; tz: string; view: ViewMode; side: boolean; width: number; bottomHeight: number; provider: "auto" | "binance" | "okx" };
+type Dialog = "markets" | "market-tab" | "indicators" | "alerts" | "settings" | "news" | "data" | "admin" | null;
+type Preferences = { compare?: { symbol: string; frame: string }; marketTabs?: MarketTab[]; bull?: string; bear?: string; symbol: string; frame: string; theme: string; tz: string; view: ViewMode; side: boolean; width: number; bottomHeight: number; provider: "auto" | "binance" | "okx" };
 const noDrawings: Drawing[] = [];
 const initial: Preferences = { symbol: "BTCUSDT", frame: "15m", theme: "dark", tz: "Asia/Jakarta", view: "candles", side: true, width: 324, bottomHeight: 335, provider: "auto" };
 
@@ -95,7 +97,8 @@ export default function Terminal() {
   const frame = supportedFrames.includes(prefs.frame) ? prefs.frame : supportedFrames[0];
   const indicators = savedIndicators;
   const activeCount = indicators.filter(config => config.visible).length;
-  const marketState = useMarket(market, frame, prefs.provider, ready);
+  const marketTabs = useMemo(() => normalizeMarketTabs(prefs.marketTabs, { symbol: market.id, frame }, availableFrames), [prefs.marketTabs, market.id, frame]);
+  const { store: marketFeedStore, state: marketState } = useMarketTabsFeed({ symbol: market.id, frame }, prefs.provider);
   const rawQuotes = useQuotes(marketIds, ready);
   const quotes = prefs.provider === "okx" || marketState.source === "OKX Spot"
     ? Object.fromEntries(Object.entries(rawQuotes).filter(([symbol]) => byId[symbol]?.category !== "Crypto"))
@@ -148,15 +151,34 @@ export default function Terminal() {
   }
   const admin = useAdminWorkspace(snapshot, restoreWorkspace, ready && scriptsReady);
 
-  const selectMarket = (item: Market, close = false) => {
-    if (market.id !== item.id) {
-      set({ symbol: item.id, frame: availableFrames(item).includes(frame) ? frame : item.id === "US10Y" ? "1d" : "15m" });
-      setRecent(values => [item.id, ...values.filter(value => value !== item.id)].slice(0,7));
-      setHover(null);
-    }
-    if (close) setDialog(null);
+  const activateTab = (tab: MarketTab, tabs = marketTabs) => {
+    set({ symbol: tab.symbol, frame: tab.frame, marketTabs: tabs });
+    setHover(null);
+    if (tab.symbol !== market.id) setRecent(values => [tab.symbol, ...values.filter(value => value !== tab.symbol)].slice(0,7));
   };
-  const switchFrame = (value: string) => { set({ frame: value }); setHover(null); };
+  const selectMarket = (item: Market, addTab = false) => {
+    const existing = marketTabs.find(tab => tab.symbol === item.id);
+    if (existing) activateTab(existing);
+    else {
+      if (addTab && marketTabs.length >= MAX_MARKET_TABS) return;
+      const tab = { symbol: item.id, frame: availableFrames(item).includes(frame) ? frame : item.id === "US10Y" ? "1d" : "15m" };
+      const next = addTab ? [...marketTabs, tab] : marketTabs.map(value => value.symbol === market.id ? tab : value);
+      activateTab(tab, next);
+    }
+    setDialog(null);
+  };
+  const closeMarketTab = (symbol: string) => {
+    const index = marketTabs.findIndex(tab => tab.symbol === symbol);
+    const remaining = marketTabs.filter(tab => tab.symbol !== symbol);
+    if (index < 0 || !remaining.length) return;
+    if (symbol === market.id) activateTab(remaining[Math.min(index, remaining.length - 1)], remaining);
+    else set({ marketTabs: remaining });
+  };
+  const switchFrame = (value: string) => {
+    if (value === frame) return;
+    const tab = { symbol: market.id, frame: value };
+    activateTab(tab, marketTabs.map(open => open.symbol === market.id ? tab : open));
+  };
   const favorite = (id: string) => setFavorites(values => values.includes(id) ? values.filter(value => value !== id) : [...values, id]);
   const toggleLower = (value: Lower) => setLower(current => current === value ? null : value);
   const addIndicator = (kind: string) => {
@@ -218,7 +240,7 @@ export default function Terminal() {
   useEffect(() => {
     if (!dialog) return;
     const previous = document.activeElement as HTMLElement | null;
-    if (dialog !== "markets") modal.current?.focus();
+    if (dialog !== "markets" && dialog !== "market-tab") modal.current?.focus();
     function trap(event: KeyboardEvent) {
       if (event.key !== "Tab") return;
       const focusable = Array.from(modal.current?.querySelectorAll<HTMLElement>("a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex='0']") ?? []);
@@ -280,11 +302,12 @@ export default function Terminal() {
   }, [indicatorState.stats, onLog]);
 
   const backdrop = useMemo(() => ({ "--right-width": prefs.width + "px", "--bottom-max": prefs.bottomHeight + "px" } as CSSProperties), [prefs.width, prefs.bottomHeight]);
-  const modalTitle = dialog === "markets" ? "Cari pasar" : dialog === "indicators" ? "Pustaka indikator" : dialog === "alerts" ? "Alert" : dialog === "news" ? "Berita & kalender" : dialog === "data" ? "Data Forex & logam" : dialog === "admin" ? "Akun admin" : "Pengaturan workspace";
+  const modalTitle = dialog === "markets" ? "Cari pasar" : dialog === "market-tab" ? "Tambah tab pasar" : dialog === "indicators" ? "Pustaka indikator" : dialog === "alerts" ? "Alert" : dialog === "news" ? "Berita & kalender" : dialog === "data" ? "Data Forex & logam" : dialog === "admin" ? "Akun admin" : "Pengaturan workspace";
   const timezoneName = timezones.find(zone => zone[0] === prefs.tz)?.[1] ?? "WIB";
   const shortIndicators = indicators.slice(0, 8);
 
   return <div className={"terminal theme-" + prefs.theme + (wide ? " chart-only" : "")} style={backdrop}>
+    <MarketTabFeeds tabs={marketTabs} provider={prefs.provider} store={marketFeedStore} enabled={ready}/>
     <header className="topbar">
       <div className="branding" aria-label="AzusaTrade"><img src="/azusa.svg" width="35" height="35" alt=""/><div><strong>Azusa<span>Trade</span></strong></div></div>
       <div className="top-divider"/>
@@ -301,6 +324,7 @@ export default function Terminal() {
 
     <main className={"work-area" + (prefs.side ? "" : " without-side")}>
       <section className="terminal-main">
+        <MarketTabs tabs={marketTabs} selected={market.id} onSelect={tab => activateTab(tab)} onClose={closeMarketTab} onAdd={() => setDialog("market-tab")}/>
         <div className="chart-toolbar">
           <button className="symbol-button" onClick={() => setDialog("markets")}><AssetIcon market={market} small/><strong>{market.id}</strong><ChevronDown size={14}/></button>
           <div className="tool-divider"/>
@@ -457,7 +481,7 @@ export default function Terminal() {
     {dialog && <div className="modal-backdrop" onClick={() => setDialog(null)}><div className={"modal modal-" + dialog} ref={modal} role="dialog" aria-modal="true" aria-label={modalTitle} tabIndex={-1} onClick={event => event.stopPropagation()}>
       <div className="modal-head"><h2>{modalTitle}</h2><IconButton title="Tutup dialog" onClick={() => setDialog(null)}><X size={20}/></IconButton></div>
       <div className="modal-body">
-        {dialog === "markets" && <MarketPicker selected={market.id} favorites={favorites} recent={recent} quotes={quotes} onMarket={item => selectMarket(item, true)} onFavorite={favorite}/>}
+        {(dialog === "markets" || dialog === "market-tab") && <MarketPicker selected={market.id} favorites={favorites} recent={recent} quotes={quotes} onMarket={item => selectMarket(item, dialog === "market-tab")} onFavorite={favorite}/>}
         {dialog === "indicators" && <><div className="modal-quick"><button className="subtle-button" onClick={() => { setDialog(null); setLower("manager"); }}><Layers3 size={15}/>Kelola indikator</button><button className="accent-button" onClick={() => { setRequested(null); setDialog(null); setLower("editor"); }}><Code2 size={15}/>Code Editor</button></div><IndicatorLibrary configs={indicators} scripts={scripts} onAdd={addIndicator} onEdit={showScript}/></>}
         {dialog === "alerts" && <AlertsPanel key={market.id + frame} alerts={alerts} market={market} timeframe={frame} plots={alertPlots} current={last?.close} timezone={prefs.tz} onAdd={item => { setAlerts(value => [...value,item]); tell("Alert " + item.symbol + " dibuat."); }} onRemove={id => setAlerts(value => value.filter(item => item.id !== id))}/>}
         {dialog === "news" && <><div className="category-filters mobile-news-tabs"><button className={mobileEditorial === "news" ? "selected" : ""} onClick={() => setMobileEditorial("news")}>Berita</button><button className={mobileEditorial === "calendar" ? "selected" : ""} onClick={() => setMobileEditorial("calendar")}>Kalender ekonomi</button></div>{mobileEditorial === "news" ? <NewsPanel timezone={prefs.tz}/> : <CalendarPanel timezone={prefs.tz}/>}</>}

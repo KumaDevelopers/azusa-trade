@@ -89,6 +89,25 @@ kbd { font-size: .67rem; color: var(--dim); border: 1px solid var(--border); bor
 .work-area { display: grid; grid-template-columns: minmax(0, 1fr) var(--right-width); min-width: 0; min-height: 0; }
 .work-area.without-side, .chart-only .work-area { grid-template-columns: minmax(0, 1fr); }
 .terminal-main { display: flex; flex-direction: column; min-width: 0; min-height: 0; position: relative; }
+.market-tabs { display: flex; align-items: center; min-width: 0; flex: 0 0 auto; gap: 4px; padding: 0 8px; border-bottom: 1px solid var(--border); background: var(--bg); }
+.market-tab-list { display: flex; min-width: 0; gap: 3px; overflow-x: auto; scrollbar-width: none; }
+.market-tab { display: flex; align-items: center; flex: 0 0 auto; border-bottom: 2px solid transparent; color: var(--muted); }
+.market-tab:hover { background: var(--hover); color: var(--text); }
+.market-tab.selected { background: var(--panel); color: var(--accent); border-bottom-color: var(--accent); }
+.market-tab-select { display: flex; align-items: center; gap: 6px; min-height: 36px; padding: 0 7px; font-size: .76rem; white-space: nowrap; }
+.market-tab-select span:last-child { color: var(--muted); font-size: .68rem; }
+.market-tab-select .asset-icon.small { width: 19px; height: 19px; font-size: .68rem; }
+.market-tab-list button:focus-visible { outline-offset: -3px; }
+.market-tab-close { display: grid; place-items: center; width: 26px; min-height: 36px; color: var(--muted); }
+.market-tab-close:hover { color: var(--text); background: var(--hover); }
+.market-tab-add { width: 34px; height: 36px; }
+@media (max-width: 760px) {
+  .market-tabs { padding-inline: 4px; }
+  .market-tab-select { min-height: 40px; padding-inline: 5px; }
+  .market-tab-close { width: 31px; min-height: 40px; }
+  .market-tab-add { width: 38px; height: 40px; }
+  .market-tab-select .asset-icon { display: none; }
+}
 .chart-toolbar { min-height: 47px; display: flex; align-items: center; padding: 0 10px 0 12px; gap: 9px; border-bottom: 1px solid var(--border); background: var(--panel); min-width: 0; }
 .symbol-button { display: flex; align-items: center; gap: 7px; padding: 4px 6px; border-radius: 6px; font-size: .83rem; white-space: nowrap; }
 .symbol-button:hover { background: var(--hover); }
